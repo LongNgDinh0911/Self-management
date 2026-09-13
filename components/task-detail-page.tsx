@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
-import { MarkdownEditor } from "@/components/markdown-editor";
+import { MarkdownEditor, MarkdownView } from "@/components/markdown-editor";
 import { TaskWorkflowRuns } from "@/components/task-workflow-runs";
 import type {
   Project,
@@ -31,6 +31,8 @@ export function TaskDetailPage({
   workflowRuns: RunWithWorkflow[];
 }) {
   const router = useRouter();
+
+  const [activeTab, setActiveTab] = useState<"detail" | "workflow" | "planning">("detail");
 
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
@@ -123,6 +125,34 @@ export function TaskDetailPage({
           {saved && !dirty && <span className="ml-auto text-xs text-emerald-400">Đã lưu</span>}
         </div>
 
+        <div className="mb-6 flex items-center gap-1 border-b border-neutral-800">
+          <TabButton active={activeTab === "detail"} onClick={() => setActiveTab("detail")}>
+            Chi tiết
+          </TabButton>
+          <TabButton active={activeTab === "workflow"} onClick={() => setActiveTab("workflow")}>
+            Workflow
+            {workflowRuns.length > 0 && (
+              <span className="ml-1.5 rounded-full bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                {workflowRuns.length}
+              </span>
+            )}
+          </TabButton>
+          <TabButton active={activeTab === "planning"} onClick={() => setActiveTab("planning")}>
+            Planning
+          </TabButton>
+        </div>
+
+        {activeTab === "workflow" ? (
+          <TaskWorkflowRuns taskId={task.id} workflows={workflows} initialRuns={workflowRuns} />
+        ) : activeTab === "planning" ? (
+          <div className="rounded-md border border-neutral-800 bg-neutral-900 px-4 py-3">
+            <MarkdownView
+              value={task.planning ?? ""}
+              emptyText="Chưa có planning. Chạy 1 workflow có node Planning để tự động tạo."
+            />
+          </div>
+        ) : (
+        <>
         <div className="flex flex-col gap-8 lg:flex-row">
           <div className="min-w-0 flex-1">
             <input
@@ -262,8 +292,8 @@ export function TaskDetailPage({
             </button>
           </div>
         </div>
-
-        <TaskWorkflowRuns taskId={task.id} workflows={workflows} initialRuns={workflowRuns} />
+        </>
+        )}
       </div>
     </div>
   );
@@ -275,5 +305,28 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <label className="mb-1 block text-xs text-neutral-400">{label}</label>
       {children}
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+        active
+          ? "border-indigo-500 text-neutral-100"
+          : "border-transparent text-neutral-500 hover:text-neutral-300"
+      }`}
+    >
+      {children}
+    </button>
   );
 }

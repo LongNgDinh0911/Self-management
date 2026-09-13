@@ -47,7 +47,13 @@ export function StepConfigPanel({
   async function handleSave() {
     setSaving(true);
     const config =
-      step.type === "ai_step" ? aiConfig : step.type === "condition" ? conditionConfig : actionConfig;
+      step.type === "ai_step"
+        ? aiConfig
+        : step.type === "condition"
+          ? conditionConfig
+          : step.type === "action"
+            ? actionConfig
+            : {};
 
     const res = await fetch(`/api/workflow-steps/${step.id}`, {
       method: "PATCH",
@@ -85,7 +91,8 @@ export function StepConfigPanel({
       {step.type === "ai_step" && (
         <>
           <label className="mb-1 block text-xs text-neutral-400">
-            Prompt (dùng {"{{task.title}}"}, {"{{task.description}}"})
+            Prompt (dùng {"{{task.title}}"}, {"{{task.description}}"}, {"{{task.planning}}"} — nếu
+            có node Planning chạy trước trong cùng workflow)
           </label>
           <textarea
             value={aiConfig.prompt}
@@ -121,6 +128,16 @@ export function StepConfigPanel({
             Vẫn đi tiếp nếu lệnh thất bại
           </label>
         </>
+      )}
+
+      {step.type === "planning" && (
+        <p className="mb-4 rounded-md border border-neutral-800 bg-neutral-900 px-2.5 py-2 text-xs text-neutral-500">
+          Node cố định — không cần cấu hình. Khi chạy, AI sẽ phân tích task và viết 1 bản kế
+          hoạch (plan), tự động lưu vào tab <span className="text-neutral-300">Planning</span>{" "}
+          của ticket. Các step AI step phía sau (cùng workflow) có thể dùng{" "}
+          <span className="text-neutral-300">{"{{task.planning}}"}</span> trong prompt để đọc
+          lại plan này. Nếu task đã có planning từ trước, step này sẽ bỏ qua, không tạo lại.
+        </p>
       )}
 
       {step.type === "action" && (

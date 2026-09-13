@@ -6,12 +6,14 @@ const DEFAULT_NAME: Record<WorkflowStepType, string> = {
   ai_step: "AI step",
   condition: "Condition",
   action: "Action",
+  planning: "Planning",
 };
 
 const DEFAULT_CONFIG: Record<WorkflowStepType, object> = {
   ai_step: { prompt: "" },
   condition: { command: "", continueOnFailure: false },
   action: { actionType: "create_pr" },
+  planning: {},
 };
 
 export async function POST(

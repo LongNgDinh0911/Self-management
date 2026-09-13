@@ -36,7 +36,12 @@ import { StepConfigPanel } from "@/components/workflow-step-panel";
 
 type WorkflowWithSteps = Workflow & { steps: WorkflowStep[] };
 
-const ADDABLE_TYPES: WorkflowStepType[] = ["ai_step", "condition", "action"];
+const ADDABLE_TYPES: WorkflowStepType[] = [
+  "ai_step",
+  "condition",
+  "action",
+  "planning",
+];
 const ACTIVE_STATUSES = new Set(["pending", "running"]);
 
 export function WorkflowBuilder({
@@ -60,7 +65,9 @@ export function WorkflowBuilder({
   const [showLog, setShowLog] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
 
   const activeTestRunIds =
     testRun && ACTIVE_STATUSES.has(testRun.status) ? [testRun.id] : [];
@@ -72,7 +79,9 @@ export function WorkflowBuilder({
   async function handleRun() {
     setTriggering(true);
     setRunError(null);
-    const res = await fetch(`/api/workflows/${initialWorkflow.id}/run`, { method: "POST" });
+    const res = await fetch(`/api/workflows/${initialWorkflow.id}/run`, {
+      method: "POST",
+    });
     setTriggering(false);
     if (res.ok) {
       setShowLog(true);
@@ -86,7 +95,9 @@ export function WorkflowBuilder({
   async function handleStop() {
     if (!testRun) return;
     setStopping(true);
-    const res = await fetch(`/api/workflow-runs/${testRun.id}/stop`, { method: "POST" });
+    const res = await fetch(`/api/workflow-runs/${testRun.id}/stop`, {
+      method: "POST",
+    });
     setStopping(false);
     if (res.ok) setTestRun(await res.json());
   }
@@ -105,7 +116,9 @@ export function WorkflowBuilder({
   async function handleDeleteWorkflow() {
     if (!confirm("Xóa workflow này? Hành động này không thể hoàn tác.")) return;
     setDeleting(true);
-    const res = await fetch(`/api/workflows/${initialWorkflow.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/workflows/${initialWorkflow.id}`, {
+      method: "DELETE",
+    });
     setDeleting(false);
     if (res.ok) {
       router.push(`/p/${projectKey}/workflows`);
@@ -153,7 +166,10 @@ export function WorkflowBuilder({
     setSelected(null);
   }
 
-  const selectedStep = selected && selected !== "trigger" ? steps.find((s) => s.id === selected) : null;
+  const selectedStep =
+    selected && selected !== "trigger"
+      ? steps.find((s) => s.id === selected)
+      : null;
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -169,7 +185,9 @@ export function WorkflowBuilder({
             <button
               onClick={() => setActive((v) => !v)}
               className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] ${
-                active ? "bg-emerald-500/10 text-emerald-400" : "bg-neutral-800 text-neutral-500"
+                active
+                  ? "bg-emerald-500/10 text-emerald-400"
+                  : "bg-neutral-800 text-neutral-500"
               }`}
             >
               <span
@@ -180,7 +198,9 @@ export function WorkflowBuilder({
           </div>
 
           <div className="flex items-center gap-2">
-            {savedAt && <span className="text-xs text-neutral-500">Đã lưu</span>}
+            {savedAt && (
+              <span className="text-xs text-neutral-500">Đã lưu</span>
+            )}
             <button
               onClick={handleSaveHeader}
               disabled={saving}
@@ -240,13 +260,20 @@ export function WorkflowBuilder({
         <div className="flex items-center gap-2 border-b border-neutral-800 px-5 py-2">
           {ADDABLE_TYPES.map((type) => {
             const meta = STEP_TYPE_META[type];
+
             return (
               <button
                 key={type}
                 onClick={() => handleAddStep(type)}
                 className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
               >
-                <meta.icon className="h-3.5 w-3.5" style={{ color: meta.color }} />+ {meta.label}
+                {meta.icon && (
+                  <meta.icon
+                    className="h-3.5 w-3.5"
+                    style={{ color: meta.color }}
+                  />
+                )}
+                + {meta.label}
               </button>
             );
           })}
@@ -258,9 +285,13 @@ export function WorkflowBuilder({
               <div className="flex items-center gap-2">
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${testRun.status === "running" ? "animate-pulse" : ""}`}
-                  style={{ backgroundColor: RUN_STATUS_META[testRun.status].color }}
+                  style={{
+                    backgroundColor: RUN_STATUS_META[testRun.status].color,
+                  }}
                 />
-                <span className="text-xs font-medium text-neutral-300">Test run</span>
+                <span className="text-xs font-medium text-neutral-300">
+                  Test run
+                </span>
                 <span
                   className="rounded-full px-1.5 py-0.5 text-[11px]"
                   style={{
@@ -309,7 +340,10 @@ export function WorkflowBuilder({
               collisionDetection={closestCenter}
               onDragEnd={handleDragEnd}
             >
-              <SortableContext items={steps.map((s) => s.id)} strategy={horizontalListSortingStrategy}>
+              <SortableContext
+                items={steps.map((s) => s.id)}
+                strategy={horizontalListSortingStrategy}
+              >
                 {steps.map((step) => (
                   <StepCardSortable
                     key={step.id}
@@ -327,7 +361,10 @@ export function WorkflowBuilder({
       {(selected === "trigger" || selectedStep) && (
         <div className="w-80 shrink-0 overflow-y-auto border-l border-neutral-800 p-4">
           {selected === "trigger" ? (
-            <TriggerPanel triggerType={initialWorkflow.triggerType} onClose={() => setSelected(null)} />
+            <TriggerPanel
+              triggerType={initialWorkflow.triggerType}
+              onClose={() => setSelected(null)}
+            />
           ) : selectedStep ? (
             <StepConfigPanel
               step={selectedStep}
@@ -360,7 +397,9 @@ function TriggerCard({
       <button
         onClick={onClick}
         className={`w-56 shrink-0 rounded-lg border bg-neutral-900 p-3 text-left ${
-          selected ? "border-indigo-500" : "border-neutral-800 hover:border-neutral-700"
+          selected
+            ? "border-indigo-500"
+            : "border-neutral-800 hover:border-neutral-700"
         }`}
       >
         <div className="mb-2 flex items-center gap-1.5">
@@ -372,26 +411,39 @@ function TriggerCard({
         <p className="text-sm font-medium text-neutral-100">
           {triggerType === "manual" ? "Manual run" : triggerType}
         </p>
-        <p className="mt-1 text-xs text-neutral-500">Bấm nút Run để chạy workflow.</p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Bấm nút Run để chạy workflow.
+        </p>
       </button>
       <Arrow />
     </>
   );
 }
 
-function TriggerPanel({ triggerType, onClose }: { triggerType: string; onClose: () => void }) {
+function TriggerPanel({
+  triggerType,
+  onClose,
+}: {
+  triggerType: string;
+  onClose: () => void;
+}) {
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
           <BoltIcon className="h-4 w-4 text-teal-400" /> Trigger
         </h3>
-        <button onClick={onClose} className="text-neutral-500 hover:text-neutral-200">
+        <button
+          onClick={onClose}
+          className="text-neutral-500 hover:text-neutral-200"
+        >
           <XMarkIcon className="h-4 w-4" />
         </button>
       </div>
 
-      <label className="mb-1 block text-xs text-neutral-400">Loại trigger</label>
+      <label className="mb-1 block text-xs text-neutral-400">
+        Loại trigger
+      </label>
       <select
         value={triggerType}
         disabled
@@ -400,7 +452,8 @@ function TriggerPanel({ triggerType, onClose }: { triggerType: string; onClose: 
         <option value="manual">Manual run</option>
       </select>
       <p className="text-xs text-neutral-500">
-        Event / cron / webhook trigger sẽ có khi app deploy lên hosting luôn bật (xem backlog).
+        Event / cron / webhook trigger sẽ có khi app deploy lên hosting luôn bật
+        (xem backlog).
       </p>
     </div>
   );
@@ -415,7 +468,14 @@ function StepCardSortable({
   selected: boolean;
   onClick: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: step.id,
   });
   const style = {
@@ -427,15 +487,28 @@ function StepCardSortable({
 
   return (
     <>
-      <div ref={setNodeRef} style={style} {...attributes} {...listeners} className="shrink-0">
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...attributes}
+        {...listeners}
+        className="shrink-0"
+      >
         <button
           onClick={onClick}
           className={`w-56 rounded-lg border bg-neutral-900 p-3 text-left ${
-            selected ? "border-indigo-500" : "border-neutral-800 hover:border-neutral-700"
+            selected
+              ? "border-indigo-500"
+              : "border-neutral-800 hover:border-neutral-700"
           } ${!step.enabled ? "opacity-50" : ""}`}
         >
           <div className="mb-2 flex items-center gap-1.5">
-            <meta.icon className="h-3.5 w-3.5" style={{ color: meta.color }} />
+            {meta.icon && (
+              <meta.icon
+                className="h-3.5 w-3.5"
+                style={{ color: meta.color }}
+              />
+            )}
             <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
               {meta.label}
             </span>
@@ -444,7 +517,9 @@ function StepCardSortable({
             )}
           </div>
           <p className="text-sm font-medium text-neutral-100">{step.name}</p>
-          <p className="mt-1 line-clamp-2 text-xs text-neutral-500">{meta.description}</p>
+          <p className="mt-1 line-clamp-2 text-xs text-neutral-500">
+            {meta.description}
+          </p>
         </button>
       </div>
       <Arrow />

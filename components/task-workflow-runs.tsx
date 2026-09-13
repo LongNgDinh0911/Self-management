@@ -27,15 +27,29 @@ export function TaskWorkflowRuns({
   initialRuns: RunWithWorkflow[];
 }) {
   const [runs, setRuns] = useState(initialRuns);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState(workflows[0]?.id ?? "");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState(
+    workflows[0]?.id ?? "",
+  );
   const [triggering, setTriggering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [resumingId, setResumingId] = useState<string | null>(null);
+  const [chainOpenId, setChainOpenId] = useState<string | null>(null);
+  const [chainWorkflowId, setChainWorkflowId] = useState(
+    workflows[0]?.id ?? "",
+  );
+  const [chaining, setChaining] = useState(false);
 
-  const activeRunIds = runs.filter((r) => ACTIVE_STATUSES.has(r.status)).map((r) => r.id);
+  // Runs still watched for live socket updates: actively executing ones,
+  // plus any run whose chain-picker is open (its own state can move to
+  // "running" the instant the new chained run POST fires — a resumed run
+  // reuses the same id, so it needs to already be subscribed too).
+  const liveWatchIds = runs
+    .filter((r) => ACTIVE_STATUSES.has(r.status) || r.status === "crashed")
+    .map((r) => r.id);
 
-  useWorkflowRunUpdates<RunWithWorkflow>(activeRunIds, (updated) => {
+  useWorkflowRunUpdates<RunWithWorkflow>(liveWatchIds, (updated) => {
     setRuns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
   });
 
@@ -65,20 +79,63 @@ export function TaskWorkflowRuns({
 
   async function handleStop(runId: string) {
     setStoppingId(runId);
-    const res = await fetch(`/api/workflow-runs/${runId}/stop`, { method: "POST" });
+    const res = await fetch(`/api/workflow-runs/${runId}/stop`, {
+      method: "POST",
+    });
     if (res.ok) {
       const updated = await res.json();
-      setRuns((prev) => prev.map((r) => (r.id === runId ? { ...r, ...updated } : r)));
+      setRuns((prev) =>
+        prev.map((r) => (r.id === runId ? { ...r, ...updated } : r)),
+      );
     }
     setStoppingId(null);
+  }
+
+  async function handleResume(runId: string) {
+    setResumingId(runId);
+    setError(null);
+    const res = await fetch(`/api/workflow-runs/${runId}/resume`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setError(body?.error ?? "Không resume được run");
+    }
+    setResumingId(null);
+  }
+
+  async function handleChain(parentRunId: string) {
+    if (!chainWorkflowId) return;
+    setChaining(true);
+    setError(null);
+
+    const res = await fetch(`/api/tasks/${taskId}/workflow-runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workflowId: chainWorkflowId, parentRunId }),
+    });
+
+    setChaining(false);
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setError(body?.error ?? "Không trigger được workflow tiếp theo");
+      return;
+    }
+
+    const run = await res.json();
+    setRuns((prev) => [run, ...prev]);
+    setChainOpenId(null);
+    setExpandedId(run.id);
   }
 
   return (
     <div className="mt-8 border-t border-neutral-800 pt-5">
       <h2 className="mb-1 text-sm font-semibold text-neutral-100">Workflow</h2>
       <p className="mb-4 text-xs text-neutral-500">
-        Trigger 1 workflow cho task này — chạy Claude Code trong 1 git worktree riêng của repo đã
-        cấu hình ở Project Settings, rồi tạo PR nếu có thay đổi.
+        Trigger 1 workflow cho task này — chạy Claude Code trong 1 git worktree
+        riêng của repo đã cấu hình ở Project Settings, rồi tạo PR nếu có thay
+        đổi.
       </p>
 
       {workflows.length === 0 ? (
@@ -154,10 +211,15 @@ export function TaskWorkflowRuns({
                       }`}
                       style={{ backgroundColor: meta.color }}
                     />
-                    <span className="text-sm text-neutral-200">{run.workflow.name}</span>
+                    <span className="text-sm text-neutral-200">
+                      {run.workflow.name}
+                    </span>
                     <span
                       className="rounded-full px-1.5 py-0.5 text-[11px]"
-                      style={{ color: meta.color, backgroundColor: `${meta.color}1a` }}
+                      style={{
+                        color: meta.color,
+                        backgroundColor: `${meta.color}1a`,
+                      }}
                     >
                       {meta.label}
                     </span>
@@ -178,7 +240,9 @@ export function TaskWorkflowRuns({
                     {run.branchName && !run.prUrl && (
                       <span className="text-neutral-600">{run.branchName}</span>
                     )}
-                    <span>{new Date(run.startedAt).toLocaleString("vi-VN")}</span>
+                    <span>
+                      {new Date(run.startedAt).toLocaleString("vi-VN")}
+                    </span>
                     {ACTIVE_STATUSES.has(run.status) && (
                       <button
                         onClick={(e) => {
@@ -198,15 +262,70 @@ export function TaskWorkflowRuns({
                         )}
                       </button>
                     )}
-                    <span className="text-neutral-600">
-                      {expanded ? (
-                        <ChevronUpIcon className="h-3.5 w-3.5" />
-                      ) : (
-                        <ChevronDownIcon className="h-3.5 w-3.5" />
+                    {run.status === "crashed" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleResume(run.id);
+                        }}
+                        disabled={resumingId === run.id}
+                        className="rounded-md border border-indigo-700 px-2 py-0.5 text-[11px] text-indigo-400 hover:border-indigo-500 hover:text-indigo-300 disabled:opacity-50"
+                      >
+                        {resumingId === run.id ? "Đang resume..." : "▷ Resume"}
+                      </button>
+                    )}
+                    {!ACTIVE_STATUSES.has(run.status) &&
+                      run.branchName &&
+                      workflows.length > 0 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setChainOpenId(
+                              chainOpenId === run.id ? null : run.id,
+                            );
+                          }}
+                          className="rounded-md border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+                        >
+                          ↳ Chạy tiếp
+                        </button>
                       )}
+                    <span className="text-neutral-600">
+                      {expanded ? "▲" : "▼"}
                     </span>
                   </div>
                 </div>
+
+                {chainOpenId === run.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-2 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-2 py-2"
+                  >
+                    <span className="text-xs text-neutral-500">
+                      Chạy tiếp trên branch{" "}
+                      <span className="text-neutral-400">{run.branchName}</span>
+                      :
+                    </span>
+                    <select
+                      value={chainWorkflowId}
+                      onChange={(e) => setChainWorkflowId(e.target.value)}
+                      className="rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-indigo-500"
+                    >
+                      {workflows.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name}
+                          {!w.active ? " (inactive)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => handleChain(run.id)}
+                      disabled={chaining || !chainWorkflowId}
+                      className="rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                    >
+                      {chaining ? "Đang trigger..." : "▷ Chạy"}
+                    </button>
+                  </div>
+                )}
 
                 {expanded && (
                   <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-xs text-neutral-400">

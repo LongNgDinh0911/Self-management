@@ -53,12 +53,13 @@ async function appendLog(ctx: RunContext, line: string) {
 
 function renderTemplate(
   template: string,
-  vars: { title: string; description: string; key: string }
+  vars: { title: string; description: string; key: string; planning: string }
 ) {
   return template
     .replaceAll("{{task.title}}", vars.title)
     .replaceAll("{{task.description}}", vars.description)
-    .replaceAll("{{task.key}}", vars.key);
+    .replaceAll("{{task.key}}", vars.key)
+    .replaceAll("{{task.planning}}", vars.planning);
 }
 
 /**
@@ -178,6 +179,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     include: {
       workflow: { include: { steps: { orderBy: { order: "asc" } }, project: true } },
       task: true,
+      parentRun: true,
     },
   });
   if (!run_) return;
@@ -186,19 +188,20 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const project = workflow.project;
   ctx.workflowName = workflow.name;
 
-  // Atomically claim the run: only proceed if it's still "pending". If a
-  // stop request already flipped it to "cancelled" in the gap between run
-  // creation and this point, count is 0 and we bail out without ever having
-  // registered anything that needs cleanup.
+  // Atomically claim the run: only proceed if it's still "pending" (fresh
+  // trigger) or "crashed" (a dev-server restart orphaned it mid-execution —
+  // see the boot-time reconciliation in server.ts). If a stop request
+  // already flipped it to "cancelled" in the gap between run creation and
+  // this point, count is 0 and we bail out without ever having registered
+  // anything that needs cleanup.
   const claimed = await prisma.workflowRun.updateMany({
-    where: { id: runId, status: "pending" },
+    where: { id: runId, status: { in: ["pending", "crashed"] } },
     data: { status: "running" },
   });
   if (claimed.count === 0) return;
   const runningUpdate = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
   emitWorkflowRunUpdate({ ...runningUpdate, workflow: { name: workflow.name } });
   await markTaskInProgress();
-  await appendLog(ctx, `Bắt đầu workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`);
 
   if (!project.repoLocalPath || !existsSync(project.repoLocalPath)) {
     return fail(
@@ -209,19 +212,81 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     return fail(`"${project.repoLocalPath}" không phải 1 git repo (thiếu .git).`);
   }
 
+  // `planning` starts from whatever the task already had (e.g. from a
+  // previous run's Planning node) and is updated in place the moment a
+  // Planning step runs in THIS run, so any step after it in the same
+  // workflow can reference the fresh plan via {{task.planning}}.
   const templateVars = {
     title: task?.title ?? "",
     description: task?.description ?? "",
     key: task ? `${project.key}-${task.number}` : "",
+    planning: task?.planning ?? "",
   };
 
-  const branchName = `ai/${project.key.toLowerCase()}-${task?.number ?? "run"}-${Date.now().toString(36)}`;
+  // Reusing an existing branch means either resuming this same run after a
+  // crash (it already has its own branchName from a prior partial
+  // execution) or chaining onto a parent run's result (continue on the
+  // branch/PR that run produced, instead of starting fresh from main).
+  const isResuming = !!run_.branchName;
+  const isChaining = !run_.branchName && !!run_.parentRun?.branchName;
+  const isNewBranch = !isResuming && !isChaining;
+  const branchName =
+    run_.branchName ??
+    run_.parentRun?.branchName ??
+    `ai/${project.key.toLowerCase()}-${task?.number ?? "run"}-${Date.now().toString(36)}`;
+  if (!run_.branchName) {
+    await prisma.workflowRun.update({ where: { id: runId }, data: { branchName } });
+  }
+
+  const allSteps = workflow.steps as WorkflowStep[];
+  const resumeFromIndex = run_.currentStepId
+    ? allSteps.findIndex((s) => s.id === run_.currentStepId) + 1
+    : 0;
+  const stepsToRun = allSteps.slice(resumeFromIndex);
+
+  await appendLog(
+    ctx,
+    `${isResuming ? "Tiếp tục" : "Bắt đầu"} workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""} trên branch ${branchName}${
+      isResuming ? " (resume sau crash)" : isChaining ? " (nối tiếp từ workflow trước)" : ""
+    }.`
+  );
+  if (resumeFromIndex > 0) {
+    await appendLog(ctx, `Bỏ qua ${resumeFromIndex} step đã hoàn tất trước đó.`);
+  }
+
   const worktreePath = mkdtempSync(path.join(tmpdir(), "self-mgmt-wt-"));
   rmSync(worktreePath, { recursive: true, force: true }); // git worktree add needs the path to not exist
 
   const controller = new AbortController();
   activeRuns.set(runId, controller);
   const { signal } = controller;
+
+  // Commits (and pushes) any pending changes in the worktree as a checkpoint
+  // after a step finishes, and records that step as done. A crash after
+  // this point resumes from the NEXT step instead of redoing this one, and
+  // the work already done is safe on the branch even if the temp worktree
+  // directory itself is later lost.
+  async function checkpoint(step: WorkflowStep) {
+    const { stdout: statusOut } = await run(
+      "git",
+      ["status", "--porcelain"],
+      worktreePath,
+      COMMAND_TIMEOUT_MS,
+      signal
+    );
+    if (statusOut.trim()) {
+      await run("git", ["add", "-A"], worktreePath, COMMAND_TIMEOUT_MS, signal);
+      await run(
+        "git",
+        ["commit", "-m", `${workflow.name}: ${step.name}`],
+        worktreePath,
+        COMMAND_TIMEOUT_MS,
+        signal
+      );
+      await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS, signal);
+    }
+    await prisma.workflowRun.update({ where: { id: runId }, data: { currentStepId: step.id } });
+  }
 
   try {
     // Everything from here on can throw for all sorts of reasons (a git
@@ -231,31 +296,108 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     // stuck at "running" because one specific step's error handling didn't
     // anticipate it.
     try {
-      await appendLog(ctx, `Tạo worktree tại ${worktreePath} trên branch ${branchName}...`);
-      try {
-        await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
-        await run(
+      // Stale administrative entries for worktrees whose directory no
+      // longer exists (e.g. left behind by a crashed process) block `git
+      // worktree add` from reusing that branch until pruned.
+      await run("git", ["worktree", "prune"], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
+
+      // A crashed process's worktree directory itself usually still exists
+      // (only the graceful `finally` cleanup removes it), so `prune` alone
+      // won't free up the branch — git refuses to check out a branch that's
+      // already checked out elsewhere. Force-detach any worktree still
+      // attached to this run's branch before reusing (or creating) it.
+      if (!isNewBranch) {
+        const { stdout: listOut } = await run(
           "git",
-          ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
+          ["worktree", "list", "--porcelain"],
           project.repoLocalPath,
           COMMAND_TIMEOUT_MS,
           signal
         );
-      } catch (err) {
-        if (err instanceof WorkflowCancelledError) throw err;
-        // fall back to local branch ref if there's no "origin" remote configured
-        await run(
-          "git",
-          ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
-          project.repoLocalPath,
-          COMMAND_TIMEOUT_MS,
-          signal
-        );
+        for (const entry of listOut.split("\n\n")) {
+          const pathMatch = entry.match(/^worktree (.+)$/m);
+          const branchMatch = entry.match(/^branch refs\/heads\/(.+)$/m);
+          if (pathMatch && branchMatch?.[1] === branchName) {
+            await run(
+              "git",
+              ["worktree", "remove", pathMatch[1], "--force"],
+              project.repoLocalPath,
+              COMMAND_TIMEOUT_MS,
+              signal
+            ).catch(() => {});
+          }
+        }
       }
 
-      let prUrl: string | null = null;
+      try {
+        await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
+      } catch (err) {
+        if (err instanceof WorkflowCancelledError) throw err;
+        // best-effort refresh; the fallbacks below cover no-"origin" repos
+      }
 
-      for (const step of workflow.steps as WorkflowStep[]) {
+      if (isNewBranch) {
+        try {
+          await run(
+            "git",
+            ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
+            project.repoLocalPath,
+            COMMAND_TIMEOUT_MS,
+            signal
+          );
+        } catch (err) {
+          if (err instanceof WorkflowCancelledError) throw err;
+          // fall back to local branch ref if there's no "origin" remote configured
+          await run(
+            "git",
+            ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
+            project.repoLocalPath,
+            COMMAND_TIMEOUT_MS,
+            signal
+          );
+        }
+      } else {
+        // Resuming or chaining: the branch already exists as a local ref in
+        // the shared repo (worktree removal never deletes the branch
+        // itself), already carrying every commit made in any worktree tied
+        // to it — just attach a fresh worktree to it.
+        try {
+          await run(
+            "git",
+            ["worktree", "add", worktreePath, branchName],
+            project.repoLocalPath,
+            COMMAND_TIMEOUT_MS,
+            signal
+          );
+        } catch (err) {
+          if (err instanceof WorkflowCancelledError) throw err;
+          // The branch was persisted to the run but a crash struck before
+          // `git worktree add -b` itself ever completed, so it doesn't
+          // actually exist yet — create it now, same as a brand-new run.
+          try {
+            await run(
+              "git",
+              ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
+              project.repoLocalPath,
+              COMMAND_TIMEOUT_MS,
+              signal
+            );
+          } catch (err2) {
+            if (err2 instanceof WorkflowCancelledError) throw err2;
+            await run(
+              "git",
+              ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
+              project.repoLocalPath,
+              COMMAND_TIMEOUT_MS,
+              signal
+            );
+          }
+        }
+      }
+
+      let prUrl: string | null = run_.prUrl ?? null;
+
+      for (const step of stepsToRun) {
         if (signal.aborted) throw new WorkflowCancelledError();
         if (!step.enabled) continue;
 
@@ -280,6 +422,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             }
             await appendLog(ctx, `Condition thất bại nhưng cấu hình cho phép tiếp tục.`);
           }
+          await checkpoint(step);
           continue;
         }
 
@@ -295,6 +438,50 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             signal
           );
           await appendLog(ctx, stdout.trim() || "(không có output)");
+          await checkpoint(step);
+          continue;
+        }
+
+        if (step.type === "planning") {
+          await appendLog(ctx, `\n▶ Planning "${step.name}"`);
+          if (!task) {
+            await appendLog(ctx, "Run này không gắn với task nào — bỏ qua, không có nơi để lưu planning.");
+            await checkpoint(step);
+            continue;
+          }
+          if (templateVars.planning.trim()) {
+            await appendLog(ctx, "Task đã có planning từ trước — bỏ qua, không tạo lại.");
+            await checkpoint(step);
+            continue;
+          }
+
+          const prompt = [
+            "Phân tích task sau và viết 1 bản kế hoạch triển khai (implementation plan) rõ ràng,",
+            "chi tiết, dạng markdown — dùng heading, danh sách các bước cần làm, và nêu rủi ro/lưu ý",
+            "nếu có.",
+            "",
+            `Task: ${templateVars.title}`,
+            "",
+            templateVars.description || "(không có mô tả)",
+            "",
+            "CHỈ trả lời bằng nội dung plan dạng markdown. Không sửa file, không chạy lệnh nào khác.",
+          ].join("\n");
+
+          const { stdout } = await run(
+            "claude",
+            ["-p", prompt, "--dangerously-skip-permissions"],
+            worktreePath,
+            AI_STEP_TIMEOUT_MS,
+            signal
+          );
+          const planning = stdout.trim();
+          await prisma.task.update({ where: { id: task.id }, data: { planning } });
+          templateVars.planning = planning;
+          await appendLog(
+            ctx,
+            "✓ Đã lưu planning vào tab Planning của ticket. Các step sau có thể dùng {{task.planning}} trong prompt."
+          );
+          await checkpoint(step);
           continue;
         }
 
@@ -302,49 +489,73 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
           const config = JSON.parse(step.config) as ActionStepConfig;
           if (config.actionType === "create_pr") {
             await appendLog(ctx, `\n▶ Action "${step.name}": create_pr`);
+            // Commit anything left over first — normally every prior step
+            // already checkpointed its own changes, this just covers the
+            // edge case of a step that touched files without one.
+            await checkpoint(step);
 
-            const { stdout: statusOut } = await run(
+            const { stdout: aheadOut } = await run(
               "git",
-              ["status", "--porcelain"],
+              ["rev-list", "--count", `origin/${project.defaultBranch}..HEAD`],
               worktreePath,
               COMMAND_TIMEOUT_MS,
               signal
             );
-            if (!statusOut.trim()) {
-              await appendLog(ctx, "Không có thay đổi nào để commit — bỏ qua tạo PR.");
+            if (parseInt(aheadOut.trim(), 10) === 0) {
+              await appendLog(ctx, "Không có commit nào mới so với base — bỏ qua tạo PR.");
               continue;
             }
 
-            const title = config.prTitle
-              ? renderTemplate(config.prTitle, templateVars)
-              : templateVars.title || workflow.name;
+            // Chaining onto a parent run's branch: a PR may already be open
+            // for it. Reuse it instead of letting `gh pr create` fail.
+            let existingPrUrl: string | null = null;
+            try {
+              const { stdout: viewOut } = await run(
+                "gh",
+                ["pr", "view", branchName, "--json", "url"],
+                worktreePath,
+                COMMAND_TIMEOUT_MS,
+                signal
+              );
+              existingPrUrl = (JSON.parse(viewOut) as { url: string }).url;
+            } catch (err) {
+              if (err instanceof WorkflowCancelledError) throw err;
+              existingPrUrl = null;
+            }
 
-            await run("git", ["add", "-A"], worktreePath, COMMAND_TIMEOUT_MS, signal);
-            await run("git", ["commit", "-m", title], worktreePath, COMMAND_TIMEOUT_MS, signal);
-            await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS, signal);
+            if (existingPrUrl) {
+              prUrl = existingPrUrl;
+              await appendLog(ctx, `PR đã tồn tại cho branch này, dùng lại: ${existingPrUrl}`);
+            } else {
+              const title = config.prTitle
+                ? renderTemplate(config.prTitle, templateVars)
+                : templateVars.title || workflow.name;
 
-            const { stdout } = await run(
-              "gh",
-              [
-                "pr",
-                "create",
-                "--base",
-                project.defaultBranch,
-                "--head",
-                branchName,
-                "--title",
-                title,
-                "--body",
-                `Tự động tạo bởi workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`,
-              ],
-              worktreePath,
-              COMMAND_TIMEOUT_MS,
-              signal
-            );
-            const urlMatch = stdout.match(/https:\/\/github\.com\/\S+/);
-            prUrl = urlMatch ? urlMatch[0] : null;
-            await appendLog(ctx, stdout.trim());
+              const { stdout } = await run(
+                "gh",
+                [
+                  "pr",
+                  "create",
+                  "--base",
+                  project.defaultBranch,
+                  "--head",
+                  branchName,
+                  "--title",
+                  title,
+                  "--body",
+                  `Tự động tạo bởi workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`,
+                ],
+                worktreePath,
+                COMMAND_TIMEOUT_MS,
+                signal
+              );
+              const urlMatch = stdout.match(/https:\/\/github\.com\/\S+/);
+              prUrl = urlMatch ? urlMatch[0] : null;
+              await appendLog(ctx, stdout.trim());
+            }
+            await prisma.workflowRun.update({ where: { id: runId }, data: { prUrl } });
           }
+          await checkpoint(step);
           continue;
         }
       }

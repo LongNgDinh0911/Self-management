@@ -1,6 +1,11 @@
 import type { ComponentType, SVGProps } from "react";
 import type { WorkflowStepType, WorkflowRunStatus } from "@/app/generated/prisma/client";
-import { SparklesIcon, CommandLineIcon, CheckCircleIcon } from "@heroicons/react/24/outline";
+import {
+  SparklesIcon,
+  CommandLineIcon,
+  CheckCircleIcon,
+  ClipboardDocumentListIcon,
+} from "@heroicons/react/24/outline";
 
 export const STEP_TYPE_META: Record<
   WorkflowStepType,
@@ -24,6 +29,12 @@ export const STEP_TYPE_META: Record<
     color: "#22c55e",
     description: "Hành động cuối, ví dụ tạo Pull Request.",
   },
+  planning: {
+    label: "Planning",
+    icon: ClipboardDocumentListIcon,
+    color: "#a855f7",
+    description: "Node cố định: AI phân tích task và tạo 1 bản plan, lưu vào tab Planning của ticket.",
+  },
 };
 
 export const RUN_STATUS_META: Record<WorkflowRunStatus, { label: string; color: string }> = {
@@ -32,8 +43,12 @@ export const RUN_STATUS_META: Record<WorkflowRunStatus, { label: string; color: 
   success: { label: "Success", color: "#22c55e" },
   failed: { label: "Failed", color: "#ef4444" },
   cancelled: { label: "Cancelled", color: "#f97316" },
+  crashed: { label: "Crashed", color: "#dc2626" },
 };
 
 export type AiStepConfig = { prompt: string };
 export type ConditionStepConfig = { command: string; continueOnFailure: boolean };
 export type ActionStepConfig = { actionType: "create_pr"; prTitle?: string };
+// Fixed/hardcoded node — no user-editable config, the prompt is baked into
+// the runner itself.
+export type PlanningStepConfig = Record<string, never>;

@@ -22,6 +22,7 @@ export async function POST(
   const { id: taskId } = await params;
   const body = await request.json();
   const workflowId = String(body.workflowId ?? "");
+  const parentRunId = body.parentRunId ? String(body.parentRunId) : undefined;
 
   if (!workflowId) {
     return NextResponse.json({ error: "Thiếu workflowId" }, { status: 400 });
@@ -30,6 +31,19 @@ export async function POST(
   const workflow = await prisma.workflow.findUnique({ where: { id: workflowId } });
   if (!workflow) {
     return NextResponse.json({ error: "Không tìm thấy workflow" }, { status: 404 });
+  }
+
+  if (parentRunId) {
+    const parentRun = await prisma.workflowRun.findUnique({ where: { id: parentRunId } });
+    if (!parentRun || parentRun.taskId !== taskId) {
+      return NextResponse.json({ error: "Không tìm thấy run để chạy tiếp" }, { status: 404 });
+    }
+    if (["pending", "running"].includes(parentRun.status)) {
+      return NextResponse.json(
+        { error: "Run đó vẫn đang chạy, chờ nó xong đã." },
+        { status: 409 }
+      );
+    }
   }
 
   const activeRun = await prisma.workflowRun.findFirst({
@@ -43,7 +57,7 @@ export async function POST(
   }
 
   const run = await prisma.workflowRun.create({
-    data: { workflowId, taskId, status: "pending" },
+    data: { workflowId, taskId, status: "pending", parentRunId },
     include: { workflow: { select: { name: true } } },
   });
 

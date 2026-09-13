@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import next from "next";
 import { Server as SocketIOServer } from "socket.io";
 import { setIO } from "@/lib/socket";
+import { prisma } from "@/lib/prisma";
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -13,7 +14,24 @@ const handle = app.getRequestHandler();
 const io = new SocketIOServer(httpServer);
 setIO(io);
 
-app.prepare().then(() => {
+// Any run still "pending"/"running" at process startup was orphaned by the
+// previous process dying (crash, restart) — this process's in-memory
+// activeRuns map is guaranteed empty, so nothing is actually executing them
+// anymore. Mark them "crashed" so they show up with a Resume action instead
+// of sitting as misleadingly "Running" forever.
+async function reconcileOrphanedWorkflowRuns() {
+  const { count } = await prisma.workflowRun.updateMany({
+    where: { status: { in: ["pending", "running"] } },
+    data: { status: "crashed" },
+  });
+  if (count > 0) {
+    console.log(`> Marked ${count} orphaned workflow run(s) as crashed`);
+  }
+}
+
+app.prepare().then(async () => {
+  await reconcileOrphanedWorkflowRuns();
+
   httpServer.on("request", (req, res) => {
     handle(req, res);
   });

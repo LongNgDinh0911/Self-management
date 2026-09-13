@@ -40,6 +40,28 @@ const markdownComponents: Components = {
   td: (props) => <td className="border border-neutral-800 px-2 py-1 text-neutral-300" {...props} />,
 };
 
+export function MarkdownView({
+  value,
+  minHeight,
+  emptyText = "Chưa có nội dung.",
+}: {
+  value: string;
+  minHeight?: string;
+  emptyText?: string;
+}) {
+  return (
+    <div style={minHeight ? { minHeight } : undefined}>
+      {value.trim() ? (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {value}
+        </ReactMarkdown>
+      ) : (
+        <p className="text-sm text-neutral-600">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
 export function MarkdownEditor({
   value,
   onChange,
@@ -87,13 +109,7 @@ export function MarkdownEditor({
         />
       ) : (
         <div className="px-3 py-2.5" style={{ minHeight: `${rows * 1.6}em` }}>
-          {value.trim() ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-              {value}
-            </ReactMarkdown>
-          ) : (
-            <p className="text-sm text-neutral-600">Chưa có nội dung.</p>
-          )}
+          <MarkdownView value={value} />
         </div>
       )}
     </div>

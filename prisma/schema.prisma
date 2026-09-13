@@ -65,6 +65,8 @@ model Task {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
+  planning    String?
+
   jiraKey     String?
   jiraUrl     String?
 
@@ -104,6 +106,7 @@ enum WorkflowStepType {
   ai_step
   condition
   action
+  planning
 }
 
 enum WorkflowRunStatus {
@@ -112,6 +115,7 @@ enum WorkflowRunStatus {
   success
   failed
   cancelled
+  crashed
 }
 
 model Workflow {
@@ -146,13 +150,14 @@ model WorkflowStep {
 }
 
 model WorkflowRun {
-  id         String            @id @default(cuid())
-  status     WorkflowRunStatus @default(pending)
-  branchName String?
-  prUrl      String?
-  log        String            @default("")
-  startedAt  DateTime          @default(now())
-  finishedAt DateTime?
+  id            String            @id @default(cuid())
+  status        WorkflowRunStatus @default(pending)
+  branchName    String?
+  prUrl         String?
+  log           String            @default("")
+  currentStepId String?
+  startedAt     DateTime          @default(now())
+  finishedAt    DateTime?
 
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String
@@ -160,6 +165,13 @@ model WorkflowRun {
   task       Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
   taskId     String?
 
+  // Chaining: a run can continue on the same branch/PR that a prior run
+  // produced, instead of starting fresh from the project's default branch.
+  parentRun   WorkflowRun?  @relation("RunChain", fields: [parentRunId], references: [id], onDelete: SetNull)
+  parentRunId String?
+  childRuns   WorkflowRun[] @relation("RunChain")
+
   @@index([workflowId])
   @@index([taskId])
+  @@index([parentRunId])
 }
