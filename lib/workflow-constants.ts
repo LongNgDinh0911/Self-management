@@ -29,6 +29,7 @@ export const RUN_STATUS_META: Record<WorkflowRunStatus, { label: string; color: 
   running: { label: "Running", color: "#3b82f6" },
   success: { label: "Success", color: "#22c55e" },
   failed: { label: "Failed", color: "#ef4444" },
+  cancelled: { label: "Cancelled", color: "#f97316" },
 };
 
 export type AiStepConfig = { prompt: string };
