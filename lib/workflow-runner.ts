@@ -141,8 +141,11 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
 
   async function fail(message: string): Promise<void> {
     await appendLog(ctx, `✕ ${message}`);
-    await prisma.workflowRun.update({
-      where: { id: runId },
+    // Guarded: if a stop request already marked this run "cancelled" while
+    // we were mid-execution (e.g. the in-process AbortController couldn't be
+    // found), this must not resurrect it back to a non-cancelled status.
+    await prisma.workflowRun.updateMany({
+      where: { id: runId, status: "running" },
       data: { status: "failed", finishedAt: new Date() },
     });
   }
@@ -159,7 +162,16 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const { workflow, task } = run_;
   const project = workflow.project;
 
-  await prisma.workflowRun.update({ where: { id: runId }, data: { status: "running" } });
+  // Atomically claim the run: only proceed if it's still "pending". If a
+  // stop request already flipped it to "cancelled" in the gap between run
+  // creation and this point, count is 0 and we bail out without ever having
+  // registered anything that needs cleanup.
+  const claimed = await prisma.workflowRun.updateMany({
+    where: { id: runId, status: "pending" },
+    data: { status: "running" },
+  });
+  if (claimed.count === 0) return;
+
   await appendLog(ctx, `Bắt đầu workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`);
 
   if (!project.repoLocalPath || !existsSync(project.repoLocalPath)) {
@@ -312,8 +324,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
       }
 
       await appendLog(ctx, `\n✓ Workflow hoàn tất.`);
-      await prisma.workflowRun.update({
-        where: { id: runId },
+      await prisma.workflowRun.updateMany({
+        where: { id: runId, status: "running" },
         data: { status: "success", branchName, prUrl, finishedAt: new Date() },
       });
     } catch (err) {

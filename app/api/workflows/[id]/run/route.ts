@@ -13,6 +13,16 @@ export async function POST(
     return NextResponse.json({ error: "Không tìm thấy workflow" }, { status: 404 });
   }
 
+  const activeRun = await prisma.workflowRun.findFirst({
+    where: { workflowId, status: { in: ["pending", "running"] } },
+  });
+  if (activeRun) {
+    return NextResponse.json(
+      { error: "Workflow này đang chạy, dừng nó trước khi chạy tiếp." },
+      { status: 409 }
+    );
+  }
+
   // Test run from the builder — not tied to a task, so {{task.*}} in step
   // prompts render as empty strings. Good enough to sanity-check the repo
   // config and step sequencing before wiring the workflow to real tasks.
