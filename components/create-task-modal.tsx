@@ -31,9 +31,6 @@ export function CreateTaskModal({
   const [dueDate, setDueDate] = useState("");
 
   const [jiraRef, setJiraRef] = useState("");
-  const [fetching, setFetching] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [fetchedFrom, setFetchedFrom] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,91 +38,6 @@ export function CreateTaskModal({
   const jiraParsed = parseJiraRef(jiraRef, jiraSite);
   const canSubmit =
     mode === "manual" ? title.trim().length > 0 : title.trim().length > 0 && !!jiraParsed.jiraKey;
-
-  function openJiraConnectPopup(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const popup = window.open(
-        "/api/auth/jira/connect?popup=1",
-        "jira-oauth",
-        "width=560,height=720"
-      );
-      if (!popup) {
-        resolve(false);
-        return;
-      }
-
-      let settled = false;
-      function handleMessage(e: MessageEvent) {
-        if (e.origin !== window.location.origin) return;
-        if (e.data?.type !== "jira-oauth") return;
-        settled = true;
-        window.removeEventListener("message", handleMessage);
-        clearInterval(poll);
-        resolve(!!e.data.ok);
-      }
-      window.addEventListener("message", handleMessage);
-
-      // fallback: user closed the popup without finishing the flow
-      const poll = setInterval(() => {
-        if (popup.closed && !settled) {
-          clearInterval(poll);
-          window.removeEventListener("message", handleMessage);
-          resolve(false);
-        }
-      }, 500);
-    });
-  }
-
-  async function attemptFetchFromJira(site: string, key: string) {
-    const res = await fetch("/api/jira/fetch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jiraSite: site, jiraKey: key }),
-    });
-    const data = await res.json().catch(() => ({}));
-    return { ok: res.ok, data };
-  }
-
-  async function handleFetchFromJira() {
-    setFetchError(null);
-    if (!jiraParsed.jiraKey) {
-      setFetchError("Chưa nhận diện được mã ticket từ nội dung này");
-      return;
-    }
-    const site = jiraParsed.jiraUrl ? new URL(jiraParsed.jiraUrl).host : jiraSite;
-    if (!site) {
-      setFetchError("Chưa biết Jira site — dán link đầy đủ, hoặc cấu hình Jira site trong Settings");
-      return;
-    }
-
-    setFetching(true);
-    let { ok, data } = await attemptFetchFromJira(site, jiraParsed.jiraKey);
-
-    if (!ok && data.needsConnect) {
-      const connected = await openJiraConnectPopup();
-      if (connected) {
-        ({ ok, data } = await attemptFetchFromJira(site, jiraParsed.jiraKey));
-      } else {
-        setFetching(false);
-        setFetchError("Chưa kết nối được Jira — thử lại nút Fetch sau khi đăng nhập.");
-        return;
-      }
-    }
-
-    setFetching(false);
-
-    if (!ok) {
-      setFetchError(data.error ?? "Không fetch được từ Jira");
-      return;
-    }
-
-    setTitle(data.title);
-    setDescription(data.description);
-    setType(data.type);
-    setPriority(data.priority);
-    setStatus(data.status);
-    setFetchedFrom(jiraParsed.jiraKey);
-  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -193,36 +105,21 @@ export function CreateTaskModal({
         {mode === "jira" && (
           <div className="mb-4">
             <label className="mb-1 block text-xs text-neutral-400">Jira ticket (link hoặc mã)</label>
-            <div className="flex gap-2">
-              <input
-                autoFocus
-                value={jiraRef}
-                onChange={(e) => {
-                  setJiraRef(e.target.value);
-                  setFetchedFrom(null);
-                }}
-                placeholder={
-                  jiraSite
-                    ? `${jiraSite}/browse/PROJ-123 hoặc PROJ-123`
-                    : "https://.../browse/PROJ-123"
-                }
-                className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
-              />
-              <button
-                type="button"
-                onClick={handleFetchFromJira}
-                disabled={fetching || !jiraParsed.jiraKey}
-                className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-              >
-                {fetching ? "Đang lấy..." : "Fetch từ Jira"}
-              </button>
-            </div>
-            {fetchError && <p className="mt-2 text-xs text-red-400">{fetchError}</p>}
-            {fetchedFrom && !fetchError && (
-              <p className="mt-2 text-xs text-emerald-400">
-                Đã lấy dữ liệu từ {fetchedFrom} — kiểm tra lại các trường bên dưới trước khi tạo.
-              </p>
-            )}
+            <input
+              autoFocus
+              value={jiraRef}
+              onChange={(e) => setJiraRef(e.target.value)}
+              placeholder={
+                jiraSite
+                  ? `${jiraSite}/browse/PROJ-123 hoặc PROJ-123`
+                  : "https://.../browse/PROJ-123"
+              }
+              className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+            />
+            <p className="mt-2 rounded-md bg-neutral-800/60 px-3 py-2 text-xs text-neutral-400">
+              Chỉ lưu tham chiếu — điền title/mô tả/priority bên dưới bằng tay, hoặc nhờ Claude Code
+              (trong chat) mở ticket này qua Chrome và điền giúp trước khi bạn tạo task.
+            </p>
           </div>
         )}
 

@@ -1,22 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { PROJECT_COLORS } from "@/lib/constants";
 import type { Project } from "@/app/generated/prisma/client";
-import type { JiraResource } from "@/lib/jira-oauth";
 
-type JiraConnection = { resources: JiraResource[]; connectedAt: Date } | null;
-
-export function ProjectSettingsForm({
-  project,
-  jiraConnection,
-}: {
-  project: Project;
-  jiraConnection: JiraConnection;
-}) {
+export function ProjectSettingsForm({ project }: { project: Project }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [name, setName] = useState(project.name);
   const [color, setColor] = useState(project.color);
   const [repoUrl, setRepoUrl] = useState(project.repoUrl ?? "");
@@ -132,28 +122,13 @@ export function ProjectSettingsForm({
 
       <h2 className="mb-1 mt-8 text-sm font-semibold text-neutral-100">Jira</h2>
       <p className="mb-5 text-xs text-neutral-500">
-        Kết nối tài khoản Jira (áp dụng chung cho toàn bộ app) để form &quot;Tạo task &gt; Từ Jira
-        link&quot; fetch dữ liệu thật.
+        Dùng bởi skill <code className="text-neutral-400">clone-jira-ticket</code> (mở ticket qua
+        Chrome, không cần token/OAuth) để biết site/project mặc định, không cần nêu lại mỗi lần.
       </p>
 
-      {searchParams.get("jiraConnected") && (
-        <p className="mb-4 rounded-md bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
-          Đã kết nối Jira thành công.
-        </p>
-      )}
-      {searchParams.get("jiraError") && (
-        <p className="mb-4 rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-400">
-          Kết nối Jira thất bại: {searchParams.get("jiraError")}
-        </p>
-      )}
-
-      <JiraConnectionCard connection={jiraConnection} />
-
-      <div className="mb-4 mt-4 space-y-4">
+      <div className="space-y-4">
         <div>
-          <label className="mb-1 block text-xs text-neutral-400">
-            Jira site mặc định cho project này
-          </label>
+          <label className="mb-1 block text-xs text-neutral-400">Jira site</label>
           <input
             value={jiraSite}
             onChange={(e) => setJiraSite(e.target.value)}
@@ -187,59 +162,6 @@ export function ProjectSettingsForm({
       </div>
 
       <DangerZone project={project} />
-    </div>
-  );
-}
-
-function JiraConnectionCard({ connection }: { connection: JiraConnection }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const [disconnecting, setDisconnecting] = useState(false);
-
-  async function handleDisconnect() {
-    setDisconnecting(true);
-    const res = await fetch("/api/auth/jira/disconnect", { method: "POST" });
-    setDisconnecting(false);
-    if (res.ok) router.refresh();
-  }
-
-  const returnTo = pathname || "/";
-
-  return (
-    <div className="flex items-center justify-between rounded-md border border-neutral-800 px-3 py-2">
-      <div>
-        {connection ? (
-          <>
-            <p className="text-sm text-neutral-200">Đã kết nối</p>
-            <p className="text-xs text-neutral-500">
-              {connection.resources.map((r) => r.name).join(", ") || "Không rõ site"}
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-neutral-200">Chưa kết nối</p>
-            <p className="text-xs text-neutral-500">
-              Đăng nhập Jira và cho phép truy cập để fetch ticket thật.
-            </p>
-          </>
-        )}
-      </div>
-      {connection ? (
-        <button
-          onClick={handleDisconnect}
-          disabled={disconnecting}
-          className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
-        >
-          {disconnecting ? "Đang ngắt..." : "Ngắt kết nối"}
-        </button>
-      ) : (
-        <a
-          href={`/api/auth/jira/connect?returnTo=${encodeURIComponent(returnTo)}`}
-          className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
-        >
-          Connect Jira
-        </a>
-      )}
     </div>
   );
 }
