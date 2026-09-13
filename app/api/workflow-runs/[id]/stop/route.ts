@@ -23,9 +23,9 @@ export async function POST(
 
   // If the runner is executing in this process, aborting its controller
   // kills the in-flight child process and the runner itself marks the run
-  // "cancelled" (and emits the update). Otherwise (e.g. dev server
-  // restarted) there's no process to kill, so mark it cancelled directly
-  // and emit here.
+  // "cancelled" (emits the update and moves the task to "in_review").
+  // Otherwise (e.g. dev server restarted) there's no process to kill, so
+  // do the same here directly.
   const stoppedInProcess = stopWorkflowRun(id);
   let updated = run;
   if (!stoppedInProcess) {
@@ -35,6 +35,9 @@ export async function POST(
       include: { workflow: { select: { name: true } } },
     });
     emitWorkflowRunUpdate(updated);
+    if (run.taskId) {
+      await prisma.task.update({ where: { id: run.taskId }, data: { status: "in_review" } });
+    }
   }
 
   return NextResponse.json(updated);
