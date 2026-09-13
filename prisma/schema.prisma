@@ -162,3 +162,13 @@ model WorkflowRun {
   @@index([workflowId])
   @@index([taskId])
 }
+
+model JiraConnection {
+  id           String   @id @default("default")
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  resources    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}

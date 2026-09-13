@@ -10,14 +10,15 @@ issue, using the Atlassian MCP tools already connected in this session
 (`getJiraIssue`, `getAccessibleAtlassianResources`, etc).
 
 Note: the app's own Create Task form ("Từ Jira link" tab) now ALSO fetches
-for real, via its own Jira REST integration (`app/api/jira/fetch/route.ts`,
-using `JIRA_EMAIL`/`JIRA_API_TOKEN` from `.env`) — that's the normal path
+for real, via its own Jira OAuth 2.0 (3LO) integration
+(`app/api/jira/fetch/route.ts` + `lib/jira-oauth.ts`) — once the user has
+clicked "Connect Jira" in a project's Settings page, that's the normal path
 for a user sitting at the browser. This skill is for when the user is
 working with you in chat instead: creating a task without touching the
-browser, bulk-cloning several tickets, or as a fallback if `.env` isn't
-configured yet. Both paths use the same field mapping and both write
-`jiraKey`/`jiraUrl` onto the task; they just fetch through different
-channels (MCP here vs. direct REST call in the app).
+browser, bulk-cloning several tickets, or as a fallback if the OAuth
+connection isn't set up yet. Both paths use the same field mapping
+(`lib/jira.ts`) and both write `jiraKey`/`jiraUrl` onto the task; they just
+fetch through different channels (MCP here vs. the app's own OAuth token).
 
 ## Two supported inputs
 
