@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { exchangeCodeForToken, fetchAccessibleResources, saveConnection } from "@/lib/jira-oauth";
+import {
+  exchangeCodeForToken,
+  fetchAccessibleResources,
+  popupResultHtml,
+  saveConnection,
+} from "@/lib/jira-oauth";
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
@@ -7,16 +12,23 @@ export async function GET(request: NextRequest) {
   const cookieRaw = request.cookies.get("jira_oauth_state")?.value;
 
   let returnTo = "/";
+  let popup = false;
   try {
-    if (cookieRaw) returnTo = JSON.parse(cookieRaw).returnTo || "/";
+    if (cookieRaw) {
+      const parsed = JSON.parse(cookieRaw);
+      returnTo = parsed.returnTo || "/";
+      popup = !!parsed.popup;
+    }
   } catch {
-    // ignore malformed cookie, fall back to "/"
+    // ignore malformed cookie, fall back to defaults
   }
 
   function fail(message: string) {
-    const res = NextResponse.redirect(
-      new URL(`${returnTo}?jiraError=${encodeURIComponent(message)}`, request.url)
-    );
+    const res = popup
+      ? new NextResponse(popupResultHtml(false, message), {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        })
+      : NextResponse.redirect(new URL(`${returnTo}?jiraError=${encodeURIComponent(message)}`, request.url));
     res.cookies.delete("jira_oauth_state");
     return res;
   }
@@ -43,7 +55,11 @@ export async function GET(request: NextRequest) {
     return fail(message);
   }
 
-  const res = NextResponse.redirect(new URL(`${returnTo}?jiraConnected=1`, request.url));
+  const res = popup
+    ? new NextResponse(popupResultHtml(true), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      })
+    : NextResponse.redirect(new URL(`${returnTo}?jiraConnected=1`, request.url));
   res.cookies.delete("jira_oauth_state");
   return res;
 }

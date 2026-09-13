@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
 
   const auth = await getValidAccessToken(jiraSite || null);
   if ("error" in auth) {
-    return NextResponse.json({ error: auth.error }, { status: 401 });
+    return NextResponse.json({ error: auth.error, needsConnect: auth.needsConnect }, { status: 401 });
   }
 
   const url = `https://api.atlassian.com/ex/jira/${auth.cloudId}/rest/api/3/issue/${encodeURIComponent(
@@ -33,13 +33,16 @@ export async function POST(request: NextRequest) {
   }
 
   if (!jiraRes.ok) {
-    const message =
-      jiraRes.status === 401 || jiraRes.status === 403
-        ? "Không có quyền xem ticket này — kiểm tra lại kết nối Jira trong Settings"
-        : jiraRes.status === 404
-          ? "Không tìm thấy ticket này trên site Jira đã kết nối"
-          : `Jira trả về lỗi ${jiraRes.status}`;
-    return NextResponse.json({ error: message }, { status: 502 });
+    const authFailed = jiraRes.status === 401 || jiraRes.status === 403;
+    const message = authFailed
+      ? "Token Jira không còn hợp lệ"
+      : jiraRes.status === 404
+        ? "Không tìm thấy ticket này trên site Jira đã kết nối"
+        : `Jira trả về lỗi ${jiraRes.status}`;
+    return NextResponse.json(
+      { error: message, needsConnect: authFailed },
+      { status: authFailed ? 401 : 502 }
+    );
   }
 
   const data = await jiraRes.json();

@@ -42,6 +42,50 @@ export function CreateTaskModal({
   const canSubmit =
     mode === "manual" ? title.trim().length > 0 : title.trim().length > 0 && !!jiraParsed.jiraKey;
 
+  function openJiraConnectPopup(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const popup = window.open(
+        "/api/auth/jira/connect?popup=1",
+        "jira-oauth",
+        "width=560,height=720"
+      );
+      if (!popup) {
+        resolve(false);
+        return;
+      }
+
+      let settled = false;
+      function handleMessage(e: MessageEvent) {
+        if (e.origin !== window.location.origin) return;
+        if (e.data?.type !== "jira-oauth") return;
+        settled = true;
+        window.removeEventListener("message", handleMessage);
+        clearInterval(poll);
+        resolve(!!e.data.ok);
+      }
+      window.addEventListener("message", handleMessage);
+
+      // fallback: user closed the popup without finishing the flow
+      const poll = setInterval(() => {
+        if (popup.closed && !settled) {
+          clearInterval(poll);
+          window.removeEventListener("message", handleMessage);
+          resolve(false);
+        }
+      }, 500);
+    });
+  }
+
+  async function attemptFetchFromJira(site: string, key: string) {
+    const res = await fetch("/api/jira/fetch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jiraSite: site, jiraKey: key }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+  }
+
   async function handleFetchFromJira() {
     setFetchError(null);
     if (!jiraParsed.jiraKey) {
@@ -55,20 +99,26 @@ export function CreateTaskModal({
     }
 
     setFetching(true);
-    const res = await fetch("/api/jira/fetch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jiraSite: site, jiraKey: jiraParsed.jiraKey }),
-    });
+    let { ok, data } = await attemptFetchFromJira(site, jiraParsed.jiraKey);
+
+    if (!ok && data.needsConnect) {
+      const connected = await openJiraConnectPopup();
+      if (connected) {
+        ({ ok, data } = await attemptFetchFromJira(site, jiraParsed.jiraKey));
+      } else {
+        setFetching(false);
+        setFetchError("Chưa kết nối được Jira — thử lại nút Fetch sau khi đăng nhập.");
+        return;
+      }
+    }
+
     setFetching(false);
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
+    if (!ok) {
       setFetchError(data.error ?? "Không fetch được từ Jira");
       return;
     }
 
-    const data = await res.json();
     setTitle(data.title);
     setDescription(data.description);
     setType(data.type);

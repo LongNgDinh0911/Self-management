@@ -106,12 +106,16 @@ export async function getConnectionStatus() {
   return { resources, connectedAt: conn.createdAt };
 }
 
+type AuthResult =
+  | { accessToken: string; cloudId: string }
+  | { error: string; needsConnect: boolean };
+
 /** Returns a valid access token + resolved cloudId for the given site, refreshing if needed. */
-export async function getValidAccessToken(
-  jiraSite?: string | null
-): Promise<{ accessToken: string; cloudId: string } | { error: string }> {
+export async function getValidAccessToken(jiraSite?: string | null): Promise<AuthResult> {
   const conn = await prisma.jiraConnection.findUnique({ where: { id: "default" } });
-  if (!conn) return { error: "Chưa kết nối tài khoản Jira — vào Project Settings để kết nối" };
+  if (!conn) {
+    return { error: "Chưa kết nối tài khoản Jira", needsConnect: true };
+  }
 
   let accessToken = conn.accessToken;
   let resources = JSON.parse(conn.resources) as JiraResource[];
@@ -124,14 +128,40 @@ export async function getValidAccessToken(
       await saveConnection(refreshed, resources);
       accessToken = refreshed.access_token;
     } catch {
-      return { error: "Token Jira đã hết hạn và không làm mới được — kết nối lại trong Settings" };
+      await disconnectJira();
+      return { error: "Token Jira đã hết hạn và không làm mới được", needsConnect: true };
     }
   }
 
   const cloudId = resolveCloudId(resources, jiraSite);
-  if (!cloudId) return { error: "Tài khoản Jira đã kết nối không có quyền truy cập site này" };
+  if (!cloudId) {
+    return {
+      error: "Tài khoản Jira đã kết nối không có quyền truy cập site này",
+      needsConnect: false,
+    };
+  }
 
   return { accessToken, cloudId };
+}
+
+/** Tiny HTML page a popup window shows right before closing itself and
+ * notifying the window that opened it via postMessage. */
+export function popupResultHtml(ok: boolean, message?: string) {
+  const payload = JSON.stringify({ type: "jira-oauth", ok, message });
+  const text = ok ? "Đã kết nối Jira." : `Kết nối Jira thất bại: ${message ?? ""}`;
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body style="font:14px sans-serif;padding:24px">
+<p id="msg">${text}</p>
+<p id="fallback" style="display:none;color:#666">Cửa sổ này không tự đóng được — bạn có thể đóng tay và quay lại tab trước để thử lại.</p>
+<script>
+  if (window.opener) {
+    window.opener.postMessage(${payload}, window.location.origin);
+    document.getElementById("msg").textContent += " Cửa sổ này sẽ tự đóng…";
+    window.close();
+  } else {
+    document.getElementById("fallback").style.display = "block";
+  }
+</script>
+</body></html>`;
 }
 
 export function resolveCloudId(resources: JiraResource[], jiraSite?: string | null): string | null {
