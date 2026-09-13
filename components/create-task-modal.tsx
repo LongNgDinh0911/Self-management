@@ -2,16 +2,19 @@
 
 import { useState, type FormEvent } from "react";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
+import { parseJiraRef } from "@/lib/jira";
 import type { Task, TaskPriority, TaskStatus, TaskType } from "@/app/generated/prisma/client";
 
 export function CreateTaskModal({
   projectId,
   defaultStatus,
+  jiraSite,
   onClose,
   onCreated,
 }: {
   projectId: string;
   defaultStatus: TaskStatus;
+  jiraSite?: string | null;
   onClose: () => void;
   onCreated: (task: Task) => void;
 }) {
@@ -22,6 +25,7 @@ export function CreateTaskModal({
   const [priority, setPriority] = useState<TaskPriority>("none");
   const [estimate, setEstimate] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [jiraRef, setJiraRef] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,6 +34,8 @@ export function CreateTaskModal({
     if (!title.trim()) return;
     setSaving(true);
     setError(null);
+
+    const { jiraKey, jiraUrl } = parseJiraRef(jiraRef, jiraSite);
 
     const res = await fetch(`/api/projects/${projectId}/tasks`, {
       method: "POST",
@@ -42,6 +48,8 @@ export function CreateTaskModal({
         priority,
         estimate: estimate === "" ? null : Number(estimate),
         dueDate: dueDate || null,
+        jiraKey,
+        jiraUrl,
       }),
     });
 
@@ -83,6 +91,23 @@ export function CreateTaskModal({
           rows={4}
           className="mb-4 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-200 outline-none focus:border-indigo-500"
         />
+
+        <label className="mb-1 block text-xs text-neutral-400">
+          Jira ticket (link hoặc mã, tùy chọn)
+        </label>
+        <input
+          value={jiraRef}
+          onChange={(e) => setJiraRef(e.target.value)}
+          placeholder={
+            jiraSite ? `${jiraSite}/browse/PROJ-123 hoặc PROJ-123` : "https://.../browse/PROJ-123"
+          }
+          className="mb-1 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+        />
+        <p className="mb-4 text-xs text-neutral-500">
+          Chỉ lưu tham chiếu — muốn tự động điền title/description/priority từ ticket, nhờ Claude
+          Code chạy skill <code className="text-neutral-400">clone-jira-ticket</code> thay vì dùng
+          form này.
+        </p>
 
         <div className="mb-4 grid grid-cols-2 gap-3">
           <div>

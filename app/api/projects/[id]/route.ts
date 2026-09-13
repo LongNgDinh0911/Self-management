@@ -21,6 +21,12 @@ export async function PATCH(
   if (typeof body.defaultBranch === "string" && body.defaultBranch.trim()) {
     data.defaultBranch = body.defaultBranch.trim();
   }
+  if (body.jiraSite === null || typeof body.jiraSite === "string") {
+    data.jiraSite = body.jiraSite?.trim() || null;
+  }
+  if (body.jiraProjectKey === null || typeof body.jiraProjectKey === "string") {
+    data.jiraProjectKey = body.jiraProjectKey?.trim().toUpperCase() || null;
+  }
 
   const project = await prisma.project.update({ where: { id }, data });
   return NextResponse.json(project);

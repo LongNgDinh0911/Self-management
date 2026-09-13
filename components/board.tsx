@@ -221,6 +221,7 @@ export function Board({
         <CreateTaskModal
           projectId={project.id}
           defaultStatus="backlog"
+          jiraSite={project.jiraSite}
           onClose={() => setShowCreateModal(false)}
           onCreated={(task) => {
             setColumns((prev) => ({

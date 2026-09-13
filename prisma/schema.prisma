@@ -42,6 +42,9 @@ model Project {
   repoLocalPath String?
   defaultBranch String  @default("main")
 
+  jiraSite       String?
+  jiraProjectKey String?
+
   tasks     Task[]
   labels    Label[]
   workflows Workflow[]

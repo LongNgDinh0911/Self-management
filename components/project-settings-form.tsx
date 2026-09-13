@@ -9,6 +9,8 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
   const [repoUrl, setRepoUrl] = useState(project.repoUrl ?? "");
   const [repoLocalPath, setRepoLocalPath] = useState(project.repoLocalPath ?? "");
   const [defaultBranch, setDefaultBranch] = useState(project.defaultBranch);
+  const [jiraSite, setJiraSite] = useState(project.jiraSite ?? "");
+  const [jiraProjectKey, setJiraProjectKey] = useState(project.jiraProjectKey ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +27,8 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
         repoUrl: repoUrl.trim() || null,
         repoLocalPath: repoLocalPath.trim() || null,
         defaultBranch: defaultBranch.trim() || "main",
+        jiraSite: jiraSite.trim() || null,
+        jiraProjectKey: jiraProjectKey.trim() || null,
       }),
     });
 
@@ -76,6 +80,34 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
             onChange={(e) => setDefaultBranch(e.target.value)}
             placeholder="main"
             className="w-40 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+          />
+        </div>
+      </div>
+
+      <h2 className="mb-1 mt-8 text-sm font-semibold text-neutral-100">Jira</h2>
+      <p className="mb-5 text-xs text-neutral-500">
+        Dùng bởi skill <code className="text-neutral-400">clone-jira-ticket</code> để biết
+        site/project mặc định, không cần nêu lại mỗi lần clone ticket.
+      </p>
+
+      <div className="space-y-4">
+        <div>
+          <label className="mb-1 block text-xs text-neutral-400">Jira site</label>
+          <input
+            value={jiraSite}
+            onChange={(e) => setJiraSite(e.target.value)}
+            placeholder="yourcompany.atlassian.net"
+            className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-neutral-400">Jira project key mặc định</label>
+          <input
+            value={jiraProjectKey}
+            onChange={(e) => setJiraProjectKey(e.target.value.toUpperCase())}
+            placeholder="PROJ"
+            className="w-40 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm uppercase text-neutral-100 outline-none focus:border-indigo-500"
           />
         </div>
       </div>
