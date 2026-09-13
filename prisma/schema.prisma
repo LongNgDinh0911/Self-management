@@ -31,8 +31,13 @@ model Project {
   archived  Boolean  @default(false)
   createdAt DateTime @default(now())
 
+  repoUrl       String?
+  repoLocalPath String?
+  defaultBranch String  @default("main")
+
   tasks     Task[]
   labels    Label[]
+  workflows Workflow[]
   nextTaskNumber Int @default(1)
 }
 
@@ -53,6 +58,7 @@ model Task {
   projectId   String
 
   labels      TaskLabel[]
+  workflowRuns WorkflowRun[]
 
   @@unique([projectId, number])
   @@index([projectId, status])
@@ -78,4 +84,67 @@ model TaskLabel {
   labelId String
 
   @@id([taskId, labelId])
+}
+
+enum WorkflowStepType {
+  ai_step
+  condition
+  action
+}
+
+enum WorkflowRunStatus {
+  pending
+  running
+  success
+  failed
+}
+
+model Workflow {
+  id          String   @id @default(cuid())
+  name        String
+  active      Boolean  @default(true)
+  triggerType String   @default("manual")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+
+  steps       WorkflowStep[]
+  runs        WorkflowRun[]
+
+  @@index([projectId])
+}
+
+model WorkflowStep {
+  id      String           @id @default(cuid())
+  order   Int
+  type    WorkflowStepType
+  name    String
+  enabled Boolean          @default(true)
+  config  String           @default("{}")
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId String
+
+  @@index([workflowId, order])
+}
+
+model WorkflowRun {
+  id         String            @id @default(cuid())
+  status     WorkflowRunStatus @default(pending)
+  branchName String?
+  prUrl      String?
+  log        String            @default("")
+  startedAt  DateTime          @default(now())
+  finishedAt DateTime?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId String
+
+  task       Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  taskId     String?
+
+  @@index([workflowId])
+  @@index([taskId])
 }

@@ -24,6 +24,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { STATUS_COLUMNS, PRIORITY_META } from "@/lib/constants";
 import type { Project, Task, TaskStatus } from "@/app/generated/prisma/client";
 import { TaskDetailModal } from "@/components/task-detail-modal";
+import { ProjectHeader } from "@/components/project-header";
 
 type ColumnsState = Record<TaskStatus, Task[]>;
 
@@ -137,16 +138,7 @@ export function Board({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">
-        <div className="flex items-center gap-2">
-          <span
-            className="h-2.5 w-2.5 rounded-full"
-            style={{ backgroundColor: project.color }}
-          />
-          <h1 className="text-sm font-semibold text-neutral-100">{project.name}</h1>
-          <span className="text-xs text-neutral-500">{project.key}</span>
-        </div>
-      </div>
+      <ProjectHeader project={project} />
 
       <DndContext
         id={`board-${project.id}`}
