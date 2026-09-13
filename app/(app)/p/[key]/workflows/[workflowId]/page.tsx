@@ -28,7 +28,7 @@ export default async function WorkflowBuilderPage({
   return (
     <div className="flex h-full flex-col">
       <ProjectHeader project={project} />
-      <WorkflowBuilder initialWorkflow={workflow} />
+      <WorkflowBuilder initialWorkflow={workflow} projectKey={project.key} />
     </div>
   );
 }

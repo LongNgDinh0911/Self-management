@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { Workflow } from "@/app/generated/prisma/client";
 
@@ -33,6 +33,15 @@ export function WorkflowList({
     }
   }
 
+  async function handleDelete(e: MouseEvent, workflowId: string) {
+    e.stopPropagation();
+    if (!confirm("Xóa workflow này? Toàn bộ step và lịch sử chạy sẽ bị xóa theo.")) return;
+    const res = await fetch(`/api/workflows/${workflowId}`, { method: "DELETE" });
+    if (res.ok) {
+      setWorkflows((prev) => prev.filter((w) => w.id !== workflowId));
+    }
+  }
+
   return (
     <div className="max-w-2xl">
       <div className="mb-4 flex items-center justify-between">
@@ -54,9 +63,14 @@ export function WorkflowList({
 
       <div className="flex flex-col gap-2">
         {workflows.map((workflow) => (
-          <button
+          <div
             key={workflow.id}
+            role="button"
+            tabIndex={0}
             onClick={() => router.push(`/p/${projectKey}/workflows/${workflow.id}`)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") router.push(`/p/${projectKey}/workflows/${workflow.id}`);
+            }}
             className="flex items-center justify-between rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-left hover:border-neutral-700"
           >
             <div className="flex items-center gap-2">
@@ -71,8 +85,17 @@ export function WorkflowList({
                 {workflow.active ? "Active" : "Inactive"}
               </span>
             </div>
-            <span className="text-xs text-neutral-500">{workflow._count.steps} step</span>
-          </button>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-neutral-500">{workflow._count.steps} step</span>
+              <button
+                onClick={(e) => handleDelete(e, workflow.id)}
+                title="Xóa workflow"
+                className="rounded-md px-1.5 py-1 text-neutral-500 hover:bg-red-500/10 hover:text-red-400"
+              >
+                🗑
+              </button>
+            </div>
+          </div>
         ))}
       </div>
     </div>
