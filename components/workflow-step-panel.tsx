@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { XMarkIcon } from "@heroicons/react/24/outline";
 import { STEP_TYPE_META } from "@/lib/workflow-constants";
 import type {
   AiStepConfig,
@@ -67,10 +68,10 @@ export function StepConfigPanel({
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
-          <span style={{ color: meta.color }}>{meta.glyph}</span> {meta.label}
+          <meta.icon className="h-4 w-4" style={{ color: meta.color }} /> {meta.label}
         </h3>
         <button onClick={onClose} className="text-neutral-500 hover:text-neutral-200">
-          ✕
+          <XMarkIcon className="h-4 w-4" />
         </button>
       </div>
 

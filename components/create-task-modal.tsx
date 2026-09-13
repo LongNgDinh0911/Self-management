@@ -145,7 +145,7 @@ export function CreateTaskModal({
             >
               {Object.entries(TASK_TYPE_META).map(([key, meta]) => (
                 <option key={key} value={key}>
-                  {meta.glyph} {meta.label}
+                  {meta.label}
                 </option>
               ))}
             </select>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowLeftIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { TaskWorkflowRuns } from "@/components/task-workflow-runs";
@@ -97,8 +98,12 @@ export function TaskDetailPage({
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-5xl px-6 py-6">
         <div className="mb-5 flex items-center gap-2 text-sm">
-          <Link href={`/p/${project.key}`} className="text-neutral-500 hover:text-neutral-300">
-            ← Board
+          <Link
+            href={`/p/${project.key}`}
+            className="flex items-center gap-1 text-neutral-500 hover:text-neutral-300"
+          >
+            <ArrowLeftIcon className="h-3.5 w-3.5" />
+            Board
           </Link>
           <span className="text-neutral-700">/</span>
           <span className="text-neutral-400">
@@ -109,9 +114,10 @@ export function TaskDetailPage({
               href={task.jiraUrl ?? undefined}
               target="_blank"
               rel="noreferrer"
-              className="ml-2 rounded bg-blue-500/10 px-1.5 py-0.5 text-xs text-blue-400 hover:underline"
+              className="ml-2 flex items-center gap-1 rounded bg-blue-500/10 px-1.5 py-0.5 text-xs text-blue-400 hover:underline"
             >
-              Jira: {task.jiraKey} ↗
+              Jira: {task.jiraKey}
+              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
             </a>
           )}
           {saved && !dirty && <span className="ml-auto text-xs text-emerald-400">Đã lưu</span>}
@@ -186,7 +192,7 @@ export function TaskDetailPage({
               >
                 {Object.entries(TASK_TYPE_META).map(([key, meta]) => (
                   <option key={key} value={key}>
-                    {meta.glyph} {meta.label}
+                    {meta.label}
                   </option>
                 ))}
               </select>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import type { Workflow } from "@/app/generated/prisma/client";
 
 type WorkflowWithCount = Workflow & { _count: { steps: number } };
@@ -51,9 +52,16 @@ export function WorkflowList({
         <button
           onClick={handleCreate}
           disabled={creating}
-          className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          className="flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
         >
-          {creating ? "Đang tạo..." : "+ Workflow mới"}
+          {creating ? (
+            "Đang tạo..."
+          ) : (
+            <>
+              <PlusIcon className="h-4 w-4" />
+              Workflow mới
+            </>
+          )}
         </button>
       </div>
 
@@ -93,7 +101,7 @@ export function WorkflowList({
               title="Xóa workflow"
               className="ml-3 shrink-0 text-neutral-600 opacity-0 hover:text-red-400 disabled:opacity-50 group-hover:opacity-100"
             >
-              ✕
+              <XMarkIcon className="h-4 w-4" />
             </button>
           </div>
         ))}

@@ -1,24 +1,26 @@
+import type { ComponentType, SVGProps } from "react";
 import type { WorkflowStepType, WorkflowRunStatus } from "@/app/generated/prisma/client";
+import { SparklesIcon, CommandLineIcon, CheckCircleIcon } from "@heroicons/react/24/outline";
 
 export const STEP_TYPE_META: Record<
   WorkflowStepType,
-  { label: string; glyph: string; color: string; description: string }
+  { label: string; icon: ComponentType<SVGProps<SVGSVGElement>>; color: string; description: string }
 > = {
   ai_step: {
     label: "AI step",
-    glyph: "✦",
+    icon: SparklesIcon,
     color: "#6366f1",
     description: "Claude Code chỉnh sửa file trong repo dựa trên prompt.",
   },
   condition: {
     label: "Condition",
-    glyph: "⌥",
+    icon: CommandLineIcon,
     color: "#eab308",
     description: "Chạy 1 lệnh (test/lint/build), quyết định có đi tiếp hay không.",
   },
   action: {
     label: "Action",
-    glyph: "✓",
+    icon: CheckCircleIcon,
     color: "#22c55e",
     description: "Hành động cuối, ví dụ tạo Pull Request.",
   },
