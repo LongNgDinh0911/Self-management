@@ -111,6 +111,7 @@ enum WorkflowRunStatus {
   running
   success
   failed
+  cancelled
 }
 
 model Workflow {

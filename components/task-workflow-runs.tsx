@@ -23,6 +23,7 @@ export function TaskWorkflowRuns({
   const [triggering, setTriggering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
   const pollingIds = useRef(new Set<string>());
 
   const hasActiveRun = runs.some((r) => ACTIVE_STATUSES.has(r.status));
@@ -73,6 +74,16 @@ export function TaskWorkflowRuns({
     const run = await res.json();
     setRuns((prev) => [run, ...prev]);
     setExpandedId(run.id);
+  }
+
+  async function handleStop(runId: string) {
+    setStoppingId(runId);
+    const res = await fetch(`/api/workflow-runs/${runId}/stop`, { method: "POST" });
+    if (res.ok) {
+      const updated = await res.json();
+      setRuns((prev) => prev.map((r) => (r.id === runId ? { ...r, ...updated } : r)));
+    }
+    setStoppingId(null);
   }
 
   return (
@@ -165,6 +176,18 @@ export function TaskWorkflowRuns({
                       <span className="text-neutral-600">{run.branchName}</span>
                     )}
                     <span>{new Date(run.startedAt).toLocaleString("vi-VN")}</span>
+                    {ACTIVE_STATUSES.has(run.status) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStop(run.id);
+                        }}
+                        disabled={stoppingId === run.id}
+                        className="rounded-md border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                      >
+                        {stoppingId === run.id ? "Đang dừng..." : "■ Stop"}
+                      </button>
+                    )}
                     <span className="text-neutral-600">{expanded ? "▲" : "▼"}</span>
                   </div>
                 </button>

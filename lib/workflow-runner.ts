@@ -18,6 +18,31 @@ type RunContext = {
   log: string;
 };
 
+class WorkflowCancelledError extends Error {
+  constructor() {
+    super("Workflow đã bị dừng theo yêu cầu.");
+    this.name = "WorkflowCancelledError";
+  }
+}
+
+// Tracks the AbortController for every run currently executing in this
+// process, so a stop request can kill the in-flight child process. A run
+// with no entry here is either not running in this process (e.g. server
+// restarted) or already finished.
+const activeRuns = new Map<string, AbortController>();
+
+/**
+ * Requests cancellation of a running workflow run. Returns true if an
+ * active run was found and aborted, false if this process has no record
+ * of it (the caller should then fall back to a direct DB status update).
+ */
+export function stopWorkflowRun(runId: string): boolean {
+  const controller = activeRuns.get(runId);
+  if (!controller) return false;
+  controller.abort();
+  return true;
+}
+
 async function appendLog(ctx: RunContext, line: string) {
   ctx.log += (ctx.log ? "\n" : "") + line;
   await prisma.workflowRun.update({ where: { id: ctx.runId }, data: { log: ctx.log } });
@@ -44,13 +69,20 @@ function run(
   cmd: string,
   args: string[],
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new WorkflowCancelledError());
+      return;
+    }
+
     const child = spawn(cmd, args, {
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      signal,
     });
 
     let stdout = "";
@@ -76,6 +108,10 @@ function run(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (err.name === "AbortError") {
+        reject(new WorkflowCancelledError());
+        return;
+      }
       reject(new Error(`Không chạy được lệnh: ${cmd} ${args.join(" ")}\n${err.message}`));
     });
 
@@ -145,6 +181,10 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const worktreePath = mkdtempSync(path.join(tmpdir(), "self-mgmt-wt-"));
   rmSync(worktreePath, { recursive: true, force: true }); // git worktree add needs the path to not exist
 
+  const controller = new AbortController();
+  activeRuns.set(runId, controller);
+  const { signal } = controller;
+
   try {
     // Everything from here on can throw for all sorts of reasons (a git
     // command failing, claude exiting non-zero, gh not being installed...).
@@ -155,26 +195,30 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     try {
       await appendLog(ctx, `Tạo worktree tại ${worktreePath} trên branch ${branchName}...`);
       try {
-        await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS);
+        await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
         await run(
           "git",
           ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
           project.repoLocalPath,
-          COMMAND_TIMEOUT_MS
+          COMMAND_TIMEOUT_MS,
+          signal
         );
-      } catch {
+      } catch (err) {
+        if (err instanceof WorkflowCancelledError) throw err;
         // fall back to local branch ref if there's no "origin" remote configured
         await run(
           "git",
           ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
           project.repoLocalPath,
-          COMMAND_TIMEOUT_MS
+          COMMAND_TIMEOUT_MS,
+          signal
         );
       }
 
       let prUrl: string | null = null;
 
       for (const step of workflow.steps as WorkflowStep[]) {
+        if (signal.aborted) throw new WorkflowCancelledError();
         if (!step.enabled) continue;
 
         if (step.type === "condition") {
@@ -185,10 +229,12 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               "bash",
               ["-lc", config.command],
               worktreePath,
-              COMMAND_TIMEOUT_MS
+              COMMAND_TIMEOUT_MS,
+              signal
             );
             await appendLog(ctx, stdout.trim() || "(không có output)");
           } catch (err) {
+            if (err instanceof WorkflowCancelledError) throw err;
             const message = err instanceof Error ? err.message : String(err);
             await appendLog(ctx, message);
             if (!config.continueOnFailure) {
@@ -207,7 +253,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             "claude",
             ["-p", prompt, "--dangerously-skip-permissions"],
             worktreePath,
-            AI_STEP_TIMEOUT_MS
+            AI_STEP_TIMEOUT_MS,
+            signal
           );
           await appendLog(ctx, stdout.trim() || "(không có output)");
           continue;
@@ -222,7 +269,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               "git",
               ["status", "--porcelain"],
               worktreePath,
-              COMMAND_TIMEOUT_MS
+              COMMAND_TIMEOUT_MS,
+              signal
             );
             if (!statusOut.trim()) {
               await appendLog(ctx, "Không có thay đổi nào để commit — bỏ qua tạo PR.");
@@ -233,9 +281,9 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               ? renderTemplate(config.prTitle, templateVars)
               : templateVars.title || workflow.name;
 
-            await run("git", ["add", "-A"], worktreePath, COMMAND_TIMEOUT_MS);
-            await run("git", ["commit", "-m", title], worktreePath, COMMAND_TIMEOUT_MS);
-            await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS);
+            await run("git", ["add", "-A"], worktreePath, COMMAND_TIMEOUT_MS, signal);
+            await run("git", ["commit", "-m", title], worktreePath, COMMAND_TIMEOUT_MS, signal);
+            await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS, signal);
 
             const { stdout } = await run(
               "gh",
@@ -252,7 +300,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
                 `Tự động tạo bởi workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`,
               ],
               worktreePath,
-              COMMAND_TIMEOUT_MS
+              COMMAND_TIMEOUT_MS,
+              signal
             );
             const urlMatch = stdout.match(/https:\/\/github\.com\/\S+/);
             prUrl = urlMatch ? urlMatch[0] : null;
@@ -268,10 +317,19 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
         data: { status: "success", branchName, prUrl, finishedAt: new Date() },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await fail(message);
+      if (err instanceof WorkflowCancelledError) {
+        await appendLog(ctx, `\n✕ ${err.message}`);
+        await prisma.workflowRun.update({
+          where: { id: runId },
+          data: { status: "cancelled", finishedAt: new Date() },
+        });
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        await fail(message);
+      }
     }
   } finally {
+    activeRuns.delete(runId);
     try {
       await run(
         "git",
