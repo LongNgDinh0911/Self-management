@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
+import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
 import type { WorkflowRun } from "@/app/generated/prisma/client";
 
 type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
@@ -24,34 +25,12 @@ export function TaskWorkflowRuns({
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
-  const pollingIds = useRef(new Set<string>());
 
-  const hasActiveRun = runs.some((r) => ACTIVE_STATUSES.has(r.status));
+  const activeRunIds = runs.filter((r) => ACTIVE_STATUSES.has(r.status)).map((r) => r.id);
 
-  useEffect(() => {
-    if (!hasActiveRun) return;
-
-    const interval = setInterval(async () => {
-      const active = runs.filter((r) => ACTIVE_STATUSES.has(r.status));
-      const updates = await Promise.all(
-        active.map((r) =>
-          fetch(`/api/workflow-runs/${r.id}`)
-            .then((res) => (res.ok ? res.json() : null))
-            .catch(() => null)
-        )
-      );
-      setRuns((prev) => {
-        const byId = new Map(prev.map((r) => [r.id, r]));
-        for (const updated of updates) {
-          if (updated) byId.set(updated.id, updated);
-        }
-        return prev.map((r) => byId.get(r.id) ?? r);
-      });
-    }, 2500);
-
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasActiveRun, runs.map((r) => r.id + r.status).join(",")]);
+  useWorkflowRunUpdates<RunWithWorkflow>(activeRunIds, (updated) => {
+    setRuns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+  });
 
   async function handleTrigger() {
     if (!selectedWorkflowId) return;
