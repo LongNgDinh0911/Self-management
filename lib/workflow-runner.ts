@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,8 +9,6 @@ import type {
   ActionStepConfig,
 } from "@/lib/workflow-constants";
 import type { WorkflowStep, TaskType, TaskPriority, TaskStatus } from "@/app/generated/prisma/client";
-
-const execFileAsync = promisify(execFile);
 
 const AI_STEP_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -36,28 +33,71 @@ function renderTemplate(
     .replaceAll("{{task.key}}", vars.key);
 }
 
-async function run(
+/**
+ * Runs a command and resolves as soon as the process itself exits — NOT
+ * when its stdio pipes close. `execFile`/`exec` wait for pipe closure,
+ * which hangs forever if the process spawns a detached grandchild that
+ * inherits stdout/stderr and outlives it (e.g. `claude` launching the
+ * user's globally-configured MCP servers as background helpers).
+ */
+function run(
   cmd: string,
   args: string[],
   cwd: string,
   timeoutMs: number
 ): Promise<{ stdout: string; stderr: string }> {
-  try {
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
       cwd,
-      timeout: timeoutMs,
-      maxBuffer: 20 * 1024 * 1024,
       env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    return { stdout, stderr };
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message: string };
-    throw new Error(
-      [`Lệnh thất bại: ${cmd} ${args.join(" ")}`, e.stderr || e.message, e.stdout]
-        .filter(Boolean)
-        .join("\n")
-    );
-  }
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      child.kill("SIGKILL");
+      settled = true;
+      reject(new Error(`Lệnh timeout sau ${Math.round(timeoutMs / 1000)}s: ${cmd} ${args.join(" ")}`));
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 20 * 1024 * 1024) child.kill("SIGKILL");
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`Không chạy được lệnh: ${cmd} ${args.join(" ")}\n${err.message}`));
+    });
+
+    // "exit" fires as soon as the process itself terminates, regardless of
+    // whether any grandchild it spawned is still holding the stdio pipes.
+    child.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(
+          new Error(
+            [`Lệnh thất bại (exit ${code}): ${cmd} ${args.join(" ")}`, stderr.trim(), stdout.trim()]
+              .filter(Boolean)
+              .join("\n")
+          )
+        );
+      }
+    });
+  });
 }
 
 export async function executeWorkflowRun(runId: string): Promise<void> {
@@ -106,57 +146,63 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   rmSync(worktreePath, { recursive: true, force: true }); // git worktree add needs the path to not exist
 
   try {
-    await appendLog(ctx, `Tạo worktree tại ${worktreePath} trên branch ${branchName}...`);
+    // Everything from here on can throw for all sorts of reasons (a git
+    // command failing, claude exiting non-zero, gh not being installed...).
+    // A single catch-all makes sure EVERY failure mode reaches fail() and
+    // updates the run's status — nothing should be able to leave a run
+    // stuck at "running" because one specific step's error handling didn't
+    // anticipate it.
     try {
-      await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS);
-      await run(
-        "git",
-        ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
-        project.repoLocalPath,
-        COMMAND_TIMEOUT_MS
-      );
-    } catch {
-      // fall back to local branch ref if there's no "origin" remote configured
-      await run(
-        "git",
-        ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
-        project.repoLocalPath,
-        COMMAND_TIMEOUT_MS
-      );
-    }
-
-    let prUrl: string | null = null;
-
-    for (const step of workflow.steps as WorkflowStep[]) {
-      if (!step.enabled) continue;
-
-      if (step.type === "condition") {
-        const config = JSON.parse(step.config) as ConditionStepConfig;
-        await appendLog(ctx, `\n▶ Condition "${step.name}": ${config.command}`);
-        try {
-          const { stdout } = await run(
-            "bash",
-            ["-lc", config.command],
-            worktreePath,
-            COMMAND_TIMEOUT_MS
-          );
-          await appendLog(ctx, stdout.trim() || "(không có output)");
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await appendLog(ctx, message);
-          if (!config.continueOnFailure) {
-            return fail(`Condition "${step.name}" thất bại, dừng workflow.`);
-          }
-          await appendLog(ctx, `Condition thất bại nhưng cấu hình cho phép tiếp tục.`);
-        }
-        continue;
+      await appendLog(ctx, `Tạo worktree tại ${worktreePath} trên branch ${branchName}...`);
+      try {
+        await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS);
+        await run(
+          "git",
+          ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
+          project.repoLocalPath,
+          COMMAND_TIMEOUT_MS
+        );
+      } catch {
+        // fall back to local branch ref if there's no "origin" remote configured
+        await run(
+          "git",
+          ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
+          project.repoLocalPath,
+          COMMAND_TIMEOUT_MS
+        );
       }
 
-      if (step.type === "ai_step") {
-        const config = JSON.parse(step.config) as AiStepConfig;
-        const prompt = renderTemplate(config.prompt, templateVars);
-        await appendLog(ctx, `\n▶ AI step "${step.name}"`);
-        try {
+      let prUrl: string | null = null;
+
+      for (const step of workflow.steps as WorkflowStep[]) {
+        if (!step.enabled) continue;
+
+        if (step.type === "condition") {
+          const config = JSON.parse(step.config) as ConditionStepConfig;
+          await appendLog(ctx, `\n▶ Condition "${step.name}": ${config.command}`);
+          try {
+            const { stdout } = await run(
+              "bash",
+              ["-lc", config.command],
+              worktreePath,
+              COMMAND_TIMEOUT_MS
+            );
+            await appendLog(ctx, stdout.trim() || "(không có output)");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await appendLog(ctx, message);
+            if (!config.continueOnFailure) {
+              return fail(`Condition "${step.name}" thất bại, dừng workflow.`);
+            }
+            await appendLog(ctx, `Condition thất bại nhưng cấu hình cho phép tiếp tục.`);
+          }
+          continue;
+        }
+
+        if (step.type === "ai_step") {
+          const config = JSON.parse(step.config) as AiStepConfig;
+          const prompt = renderTemplate(config.prompt, templateVars);
+          await appendLog(ctx, `\n▶ AI step "${step.name}"`);
           const { stdout } = await run(
             "claude",
             ["-p", prompt, "--dangerously-skip-permissions"],
@@ -164,39 +210,33 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             AI_STEP_TIMEOUT_MS
           );
           await appendLog(ctx, stdout.trim() || "(không có output)");
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await appendLog(ctx, message);
-          return fail(`AI step "${step.name}" thất bại, dừng workflow.`);
+          continue;
         }
-        continue;
-      }
 
-      if (step.type === "action") {
-        const config = JSON.parse(step.config) as ActionStepConfig;
-        if (config.actionType === "create_pr") {
-          await appendLog(ctx, `\n▶ Action "${step.name}": create_pr`);
+        if (step.type === "action") {
+          const config = JSON.parse(step.config) as ActionStepConfig;
+          if (config.actionType === "create_pr") {
+            await appendLog(ctx, `\n▶ Action "${step.name}": create_pr`);
 
-          const { stdout: statusOut } = await run(
-            "git",
-            ["status", "--porcelain"],
-            worktreePath,
-            COMMAND_TIMEOUT_MS
-          );
-          if (!statusOut.trim()) {
-            await appendLog(ctx, "Không có thay đổi nào để commit — bỏ qua tạo PR.");
-            continue;
-          }
+            const { stdout: statusOut } = await run(
+              "git",
+              ["status", "--porcelain"],
+              worktreePath,
+              COMMAND_TIMEOUT_MS
+            );
+            if (!statusOut.trim()) {
+              await appendLog(ctx, "Không có thay đổi nào để commit — bỏ qua tạo PR.");
+              continue;
+            }
 
-          const title = config.prTitle
-            ? renderTemplate(config.prTitle, templateVars)
-            : templateVars.title || workflow.name;
+            const title = config.prTitle
+              ? renderTemplate(config.prTitle, templateVars)
+              : templateVars.title || workflow.name;
 
-          await run("git", ["add", "-A"], worktreePath, COMMAND_TIMEOUT_MS);
-          await run("git", ["commit", "-m", title], worktreePath, COMMAND_TIMEOUT_MS);
-          await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS);
+            await run("git", ["add", "-A"], worktreePath, COMMAND_TIMEOUT_MS);
+            await run("git", ["commit", "-m", title], worktreePath, COMMAND_TIMEOUT_MS);
+            await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS);
 
-          try {
             const { stdout } = await run(
               "gh",
               [
@@ -217,21 +257,20 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             const urlMatch = stdout.match(/https:\/\/github\.com\/\S+/);
             prUrl = urlMatch ? urlMatch[0] : null;
             await appendLog(ctx, stdout.trim());
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            await appendLog(ctx, message);
-            return fail(`Tạo PR thất bại, dừng workflow.`);
           }
+          continue;
         }
-        continue;
       }
-    }
 
-    await appendLog(ctx, `\n✓ Workflow hoàn tất.`);
-    await prisma.workflowRun.update({
-      where: { id: runId },
-      data: { status: "success", branchName, prUrl, finishedAt: new Date() },
-    });
+      await appendLog(ctx, `\n✓ Workflow hoàn tất.`);
+      await prisma.workflowRun.update({
+        where: { id: runId },
+        data: { status: "success", branchName, prUrl, finishedAt: new Date() },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await fail(message);
+    }
   } finally {
     try {
       await run(
