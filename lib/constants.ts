@@ -1,4 +1,11 @@
+import type { ComponentType, SVGProps } from "react";
 import type { TaskPriority, TaskStatus, TaskType } from "@/app/generated/prisma/client";
+import {
+  CheckIcon,
+  BugAntIcon,
+  BookOpenIcon,
+  RocketLaunchIcon,
+} from "@heroicons/react/24/outline";
 
 export const STATUS_COLUMNS: { key: TaskStatus; label: string }[] = [
   { key: "backlog", label: "Backlog" },
@@ -16,11 +23,14 @@ export const PRIORITY_META: Record<TaskPriority, { label: string; color: string 
   urgent: { label: "Urgent", color: "#ef4444" },
 };
 
-export const TASK_TYPE_META: Record<TaskType, { label: string; glyph: string; color: string }> = {
-  task: { label: "Task", glyph: "✓", color: "#3b82f6" },
-  bug: { label: "Bug", glyph: "✕", color: "#ef4444" },
-  story: { label: "Story", glyph: "◆", color: "#22c55e" },
-  epic: { label: "Epic", glyph: "⚡", color: "#a855f7" },
+export const TASK_TYPE_META: Record<
+  TaskType,
+  { label: string; icon: ComponentType<SVGProps<SVGSVGElement>>; color: string }
+> = {
+  task: { label: "Task", icon: CheckIcon, color: "#3b82f6" },
+  bug: { label: "Bug", icon: BugAntIcon, color: "#ef4444" },
+  story: { label: "Story", icon: BookOpenIcon, color: "#22c55e" },
+  epic: { label: "Epic", icon: RocketLaunchIcon, color: "#a855f7" },
 };
 
 export const PROJECT_COLORS = [

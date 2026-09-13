@@ -1,6 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import {
+  PlayIcon,
+  StopIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  ArrowTopRightOnSquareIcon,
+} from "@heroicons/react/24/outline";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
 import type { WorkflowRun } from "@/app/generated/prisma/client";
@@ -96,9 +103,16 @@ export function TaskWorkflowRuns({
           <button
             onClick={handleTrigger}
             disabled={triggering || !selectedWorkflowId}
-            className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
           >
-            {triggering ? "Đang trigger..." : "▷ Run workflow"}
+            {triggering ? (
+              "Đang trigger..."
+            ) : (
+              <>
+                <PlayIcon className="h-3.5 w-3.5" />
+                Run workflow
+              </>
+            )}
           </button>
         </div>
       )}
@@ -155,9 +169,10 @@ export function TaskWorkflowRuns({
                         target="_blank"
                         rel="noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="text-indigo-400 hover:underline"
+                        className="flex items-center gap-1 text-indigo-400 hover:underline"
                       >
-                        PR ↗
+                        PR
+                        <ArrowTopRightOnSquareIcon className="h-3 w-3" />
                       </a>
                     )}
                     {run.branchName && !run.prUrl && (
@@ -171,12 +186,25 @@ export function TaskWorkflowRuns({
                           handleStop(run.id);
                         }}
                         disabled={stoppingId === run.id}
-                        className="rounded-md border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                        className="flex items-center gap-1 rounded-md border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-red-500 hover:text-red-400 disabled:opacity-50"
                       >
-                        {stoppingId === run.id ? "Đang dừng..." : "■ Stop"}
+                        {stoppingId === run.id ? (
+                          "Đang dừng..."
+                        ) : (
+                          <>
+                            <StopIcon className="h-3 w-3" />
+                            Stop
+                          </>
+                        )}
                       </button>
                     )}
-                    <span className="text-neutral-600">{expanded ? "▲" : "▼"}</span>
+                    <span className="text-neutral-600">
+                      {expanded ? (
+                        <ChevronUpIcon className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDownIcon className="h-3.5 w-3.5" />
+                      )}
+                    </span>
                   </div>
                 </div>
 

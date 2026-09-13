@@ -17,6 +17,13 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  BoltIcon,
+  PlayIcon,
+  StopIcon,
+  XMarkIcon,
+  ArrowTopRightOnSquareIcon,
+} from "@heroicons/react/24/outline";
 import { STEP_TYPE_META, RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
 import type {
@@ -153,7 +160,7 @@ export function WorkflowBuilder({
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-3">
           <div className="flex items-center gap-2">
-            <span className="text-base">⚡</span>
+            <BoltIcon className="h-4 w-4 text-teal-400" />
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -185,18 +192,32 @@ export function WorkflowBuilder({
               <button
                 onClick={handleStop}
                 disabled={stopping}
-                className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
               >
-                {stopping ? "Đang dừng..." : "■ Stop"}
+                {stopping ? (
+                  "Đang dừng..."
+                ) : (
+                  <>
+                    <StopIcon className="h-3.5 w-3.5" />
+                    Stop
+                  </>
+                )}
               </button>
             ) : (
               <button
                 onClick={handleRun}
                 disabled={triggering}
                 title="Chạy thử workflow này — không gắn với task nào, {{task.*}} trong prompt sẽ để trống"
-                className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
               >
-                {triggering ? "Đang trigger..." : "▷ Run"}
+                {triggering ? (
+                  "Đang trigger..."
+                ) : (
+                  <>
+                    <PlayIcon className="h-3.5 w-3.5" />
+                    Run
+                  </>
+                )}
               </button>
             )}
             <button
@@ -225,7 +246,7 @@ export function WorkflowBuilder({
                 onClick={() => handleAddStep(type)}
                 className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
               >
-                <span style={{ color: meta.color }}>{meta.glyph}</span>+ {meta.label}
+                <meta.icon className="h-3.5 w-3.5" style={{ color: meta.color }} />+ {meta.label}
               </button>
             );
           })}
@@ -254,9 +275,10 @@ export function WorkflowBuilder({
                     href={testRun.prUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-[11px] text-indigo-400 hover:underline"
+                    className="flex items-center gap-1 text-[11px] text-indigo-400 hover:underline"
                   >
-                    PR ↗
+                    PR
+                    <ArrowTopRightOnSquareIcon className="h-3 w-3" />
                   </a>
                 )}
               </div>
@@ -342,7 +364,7 @@ function TriggerCard({
         }`}
       >
         <div className="mb-2 flex items-center gap-1.5">
-          <span className="text-teal-400">⚡</span>
+          <BoltIcon className="h-3.5 w-3.5 text-teal-400" />
           <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
             Trigger
           </span>
@@ -362,10 +384,10 @@ function TriggerPanel({ triggerType, onClose }: { triggerType: string; onClose: 
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
-          <span className="text-teal-400">⚡</span> Trigger
+          <BoltIcon className="h-4 w-4 text-teal-400" /> Trigger
         </h3>
         <button onClick={onClose} className="text-neutral-500 hover:text-neutral-200">
-          ✕
+          <XMarkIcon className="h-4 w-4" />
         </button>
       </div>
 
@@ -413,7 +435,7 @@ function StepCardSortable({
           } ${!step.enabled ? "opacity-50" : ""}`}
         >
           <div className="mb-2 flex items-center gap-1.5">
-            <span style={{ color: meta.color }}>{meta.glyph}</span>
+            <meta.icon className="h-3.5 w-3.5" style={{ color: meta.color }} />
             <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
               {meta.label}
             </span>

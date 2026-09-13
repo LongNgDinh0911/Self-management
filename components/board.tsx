@@ -21,6 +21,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { PlusIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import type { Project, Task, TaskStatus } from "@/app/generated/prisma/client";
 import { ProjectHeader } from "@/components/project-header";
@@ -143,9 +144,10 @@ export function Board({
       <div className="flex justify-end border-b border-neutral-800 px-5 py-2">
         <button
           onClick={() => setShowCreateModal(true)}
-          className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+          className="flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
         >
-          + Task mới
+          <PlusIcon className="h-3.5 w-3.5" />
+          Task mới
         </button>
       </div>
 
@@ -340,9 +342,7 @@ function TaskCard({
     >
       <div className="mb-1 flex items-center justify-between">
         <span className="flex items-center gap-1 text-[11px] text-neutral-500">
-          <span style={{ color: type.color }} title={type.label}>
-            {type.glyph}
-          </span>
+          <type.icon className="h-3 w-3 shrink-0" style={{ color: type.color }} aria-label={type.label} />
           {projectKey}-{task.number}
         </span>
         {task.priority !== "none" && (
