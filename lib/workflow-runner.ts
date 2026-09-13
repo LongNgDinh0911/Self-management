@@ -145,6 +145,22 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
       where: { id: runId },
       data: { status: "failed", finishedAt: new Date() },
     });
+    await markTaskInReview();
+  }
+
+  // A run's task moves to "in_progress" the moment its workflow starts, and
+  // to "in_review" the moment the workflow reaches any terminal state
+  // (success, failed, or cancelled) — regardless of outcome, there's now
+  // something for a human to look at. Test runs from the Workflow Builder
+  // have no taskId, so they never touch a task's status.
+  async function markTaskInProgress(): Promise<void> {
+    if (!task) return;
+    await prisma.task.update({ where: { id: task.id }, data: { status: "in_progress" } });
+  }
+
+  async function markTaskInReview(): Promise<void> {
+    if (!task) return;
+    await prisma.task.update({ where: { id: task.id }, data: { status: "in_review" } });
   }
 
   const run_ = await prisma.workflowRun.findUnique({
@@ -160,6 +176,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const project = workflow.project;
 
   await prisma.workflowRun.update({ where: { id: runId }, data: { status: "running" } });
+  await markTaskInProgress();
   await appendLog(ctx, `Bắt đầu workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`);
 
   if (!project.repoLocalPath || !existsSync(project.repoLocalPath)) {
@@ -316,6 +333,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
         where: { id: runId },
         data: { status: "success", branchName, prUrl, finishedAt: new Date() },
       });
+      await markTaskInReview();
     } catch (err) {
       if (err instanceof WorkflowCancelledError) {
         await appendLog(ctx, `\n✕ ${err.message}`);
@@ -323,6 +341,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
           where: { id: runId },
           data: { status: "cancelled", finishedAt: new Date() },
         });
+        await markTaskInReview();
       } else {
         const message = err instanceof Error ? err.message : String(err);
         await fail(message);
