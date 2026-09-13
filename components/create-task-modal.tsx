@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import { parseJiraRef } from "@/lib/jira";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import type { Task, TaskPriority, TaskStatus, TaskType } from "@/app/generated/prisma/client";
 
 type Mode = "manual" | "jira";
@@ -77,9 +78,9 @@ export function CreateTaskModal({
       <form
         onSubmit={handleSubmit}
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-900 p-5 shadow-xl"
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-xl"
       >
-        <h2 className="mb-4 text-sm font-semibold text-neutral-100">Tạo task mới</h2>
+        <h2 className="mb-4 text-lg font-semibold text-neutral-100">Tạo task mới</h2>
 
         <div className="mb-5 flex gap-1 rounded-md bg-neutral-800 p-1">
           <button
@@ -128,17 +129,13 @@ export function CreateTaskModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Tên task..."
-          className="mb-4 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+          className="mb-4 w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-base text-neutral-100 outline-none focus:border-indigo-500"
         />
 
         <label className="mb-1 block text-xs text-neutral-400">Mô tả</label>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Mô tả..."
-          rows={4}
-          className="mb-4 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-200 outline-none focus:border-indigo-500"
-        />
+        <div className="mb-4">
+          <MarkdownEditor value={description} onChange={setDescription} rows={12} placeholder="Mô tả... (hỗ trợ Markdown)" />
+        </div>
 
         <div className="mb-4 grid grid-cols-2 gap-3">
           <div>

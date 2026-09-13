@@ -23,7 +23,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import type { Project, Task, TaskStatus } from "@/app/generated/prisma/client";
-import { TaskDetailModal } from "@/components/task-detail-modal";
 import { ProjectHeader } from "@/components/project-header";
 import { CreateTaskModal } from "@/components/create-task-modal";
 
@@ -52,7 +51,6 @@ export function Board({
   const router = useRouter();
   const [columns, setColumns] = useState<ColumnsState>(() => groupTasks(initialTasks));
   const [activeTask, setActiveTask] = useState<Task | null>(null);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const sensors = useSensors(
@@ -168,7 +166,7 @@ export function Board({
               tasks={columns[column.key]}
               projectId={project.id}
               projectKey={project.key}
-              onTaskClick={setEditingTask}
+              onTaskClick={(task) => router.push(`/p/${project.key}/t/${task.number}`)}
               onTaskCreated={(task) =>
                 setColumns((prev) => ({
                   ...prev,
@@ -185,37 +183,6 @@ export function Board({
           ) : null}
         </DragOverlay>
       </DndContext>
-
-      {editingTask && (
-        <TaskDetailModal
-          task={editingTask}
-          onClose={() => setEditingTask(null)}
-          onUpdated={(updated) => {
-            setColumns((prev) => {
-              const oldStatus = editingTask.status;
-              if (updated.status === oldStatus) {
-                return {
-                  ...prev,
-                  [oldStatus]: prev[oldStatus].map((t) => (t.id === updated.id ? updated : t)),
-                };
-              }
-              return {
-                ...prev,
-                [oldStatus]: prev[oldStatus].filter((t) => t.id !== updated.id),
-                [updated.status]: [...prev[updated.status], updated],
-              };
-            });
-            setEditingTask(null);
-          }}
-          onDeleted={(id) => {
-            setColumns((prev) => ({
-              ...prev,
-              [editingTask.status]: prev[editingTask.status].filter((t) => t.id !== id),
-            }));
-            setEditingTask(null);
-          }}
-        />
-      )}
 
       {showCreateModal && (
         <CreateTaskModal

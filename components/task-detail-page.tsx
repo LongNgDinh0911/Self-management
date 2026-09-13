@@ -1,0 +1,272 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
+import { MarkdownEditor } from "@/components/markdown-editor";
+import type {
+  Project,
+  Task,
+  TaskPriority,
+  TaskStatus,
+  TaskType,
+} from "@/app/generated/prisma/client";
+
+export function TaskDetailPage({ project, task }: { project: Project; task: Task }) {
+  const router = useRouter();
+
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description);
+  const [status, setStatus] = useState<TaskStatus>(task.status);
+  const [priority, setPriority] = useState<TaskPriority>(task.priority);
+  const [type, setType] = useState<TaskType>(task.type);
+  const [estimate, setEstimate] = useState(task.estimate?.toString() ?? "");
+  const [dueDate, setDueDate] = useState(
+    task.dueDate ? new Date(task.dueDate).toISOString().slice(0, 10) : ""
+  );
+
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const dirty =
+    title !== task.title ||
+    description !== task.description ||
+    status !== task.status ||
+    priority !== task.priority ||
+    type !== task.type ||
+    estimate !== (task.estimate?.toString() ?? "") ||
+    dueDate !== (task.dueDate ? new Date(task.dueDate).toISOString().slice(0, 10) : "");
+
+  async function handleSave() {
+    setSaving(true);
+    setSaved(false);
+    setError(null);
+
+    const res = await fetch(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title.trim(),
+        description,
+        status,
+        priority,
+        type,
+        estimate: estimate === "" ? null : Number(estimate),
+        dueDate: dueDate === "" ? null : dueDate,
+      }),
+    });
+
+    setSaving(false);
+
+    if (!res.ok) {
+      setError("Không lưu được task");
+      return;
+    }
+
+    setSaved(true);
+    router.refresh();
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    const res = await fetch(`/api/tasks/${task.id}`, { method: "DELETE" });
+    setDeleting(false);
+    if (res.ok) {
+      router.push(`/p/${project.key}`);
+      router.refresh();
+    }
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-5xl px-6 py-6">
+        <div className="mb-5 flex items-center gap-2 text-sm">
+          <Link href={`/p/${project.key}`} className="text-neutral-500 hover:text-neutral-300">
+            ← Board
+          </Link>
+          <span className="text-neutral-700">/</span>
+          <span className="text-neutral-400">
+            {project.key}-{task.number}
+          </span>
+          {task.jiraKey && (
+            <a
+              href={task.jiraUrl ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 rounded bg-blue-500/10 px-1.5 py-0.5 text-xs text-blue-400 hover:underline"
+            >
+              Jira: {task.jiraKey} ↗
+            </a>
+          )}
+          {saved && !dirty && <span className="ml-auto text-xs text-emerald-400">Đã lưu</span>}
+        </div>
+
+        <div className="flex flex-col gap-8 lg:flex-row">
+          <div className="min-w-0 flex-1">
+            <input
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setSaved(false);
+              }}
+              className="mb-5 w-full rounded-md border border-transparent bg-transparent text-2xl font-semibold text-neutral-100 outline-none focus:border-neutral-700 focus:bg-neutral-900 focus:px-2 focus:py-1"
+            />
+
+            <label className="mb-1 block text-xs text-neutral-400">Mô tả</label>
+            <MarkdownEditor
+              value={description}
+              onChange={(v) => {
+                setDescription(v);
+                setSaved(false);
+              }}
+              rows={18}
+              placeholder="Mô tả... (hỗ trợ Markdown)"
+            />
+          </div>
+
+          <div className="w-full shrink-0 space-y-4 lg:w-64">
+            <Field label="Status">
+              <select
+                value={status}
+                onChange={(e) => {
+                  setStatus(e.target.value as TaskStatus);
+                  setSaved(false);
+                }}
+                className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+              >
+                {STATUS_COLUMNS.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Priority">
+              <select
+                value={priority}
+                onChange={(e) => {
+                  setPriority(e.target.value as TaskPriority);
+                  setSaved(false);
+                }}
+                className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+              >
+                {Object.entries(PRIORITY_META).map(([key, meta]) => (
+                  <option key={key} value={key}>
+                    {meta.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Type">
+              <select
+                value={type}
+                onChange={(e) => {
+                  setType(e.target.value as TaskType);
+                  setSaved(false);
+                }}
+                className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+              >
+                {Object.entries(TASK_TYPE_META).map(([key, meta]) => (
+                  <option key={key} value={key}>
+                    {meta.glyph} {meta.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Estimate (giờ)">
+              <input
+                type="number"
+                min={0}
+                value={estimate}
+                onChange={(e) => {
+                  setEstimate(e.target.value);
+                  setSaved(false);
+                }}
+                className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+              />
+            </Field>
+
+            <Field label="Due date">
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => {
+                  setDueDate(e.target.value);
+                  setSaved(false);
+                }}
+                className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+              />
+            </Field>
+
+            <div className="border-t border-neutral-800 pt-3 text-xs text-neutral-600">
+              <p>Tạo lúc {new Date(task.createdAt).toLocaleString("vi-VN")}</p>
+              <p>Cập nhật {new Date(task.updatedAt).toLocaleString("vi-VN")}</p>
+            </div>
+          </div>
+        </div>
+
+        {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
+
+        <div className="mt-6 flex items-center justify-between border-t border-neutral-800 pt-4">
+          {!confirmDelete ? (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="text-sm text-red-400 hover:text-red-300"
+            >
+              Xóa task
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-neutral-400">Xóa vĩnh viễn task này?</span>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="text-sm text-neutral-500 hover:text-neutral-300"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="rounded-md bg-red-600 px-3 py-1 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                {deleting ? "Đang xóa..." : "Xác nhận xóa"}
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/p/${project.key}`}
+              className="rounded-md px-3 py-1.5 text-sm text-neutral-400 hover:text-neutral-200"
+            >
+              Đóng
+            </Link>
+            <button
+              onClick={handleSave}
+              disabled={saving || !title.trim() || (!dirty && saved)}
+              className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {saving ? "Đang lưu..." : "Lưu"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs text-neutral-400">{label}</label>
+      {children}
+    </div>
+  );
+}
