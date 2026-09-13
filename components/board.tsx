@@ -21,10 +21,11 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { STATUS_COLUMNS, PRIORITY_META } from "@/lib/constants";
+import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import type { Project, Task, TaskStatus } from "@/app/generated/prisma/client";
 import { TaskDetailModal } from "@/components/task-detail-modal";
 import { ProjectHeader } from "@/components/project-header";
+import { CreateTaskModal } from "@/components/create-task-modal";
 
 type ColumnsState = Record<TaskStatus, Task[]>;
 
@@ -52,6 +53,7 @@ export function Board({
   const [columns, setColumns] = useState<ColumnsState>(() => groupTasks(initialTasks));
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
@@ -140,6 +142,15 @@ export function Board({
     <div className="flex h-full flex-col">
       <ProjectHeader project={project} />
 
+      <div className="flex justify-end border-b border-neutral-800 px-5 py-2">
+        <button
+          onClick={() => setShowCreateModal(true)}
+          className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+        >
+          + Task mới
+        </button>
+      </div>
+
       <DndContext
         id={`board-${project.id}`}
         sensors={sensors}
@@ -202,6 +213,21 @@ export function Board({
               [editingTask.status]: prev[editingTask.status].filter((t) => t.id !== id),
             }));
             setEditingTask(null);
+          }}
+        />
+      )}
+
+      {showCreateModal && (
+        <CreateTaskModal
+          projectId={project.id}
+          defaultStatus="backlog"
+          onClose={() => setShowCreateModal(false)}
+          onCreated={(task) => {
+            setColumns((prev) => ({
+              ...prev,
+              [task.status]: [...prev[task.status], task],
+            }));
+            setShowCreateModal(false);
           }}
         />
       )}
@@ -336,6 +362,7 @@ function TaskCard({
   dragging?: boolean;
 }) {
   const priority = PRIORITY_META[task.priority];
+  const type = TASK_TYPE_META[task.type];
   return (
     <button
       onClick={onClick}
@@ -344,7 +371,10 @@ function TaskCard({
       }`}
     >
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] text-neutral-500">
+        <span className="flex items-center gap-1 text-[11px] text-neutral-500">
+          <span style={{ color: type.color }} title={type.label}>
+            {type.glyph}
+          </span>
           {projectKey}-{task.number}
         </span>
         {task.priority !== "none" && (
@@ -356,10 +386,15 @@ function TaskCard({
         )}
       </div>
       <p className="line-clamp-2 text-sm text-neutral-100">{task.title}</p>
-      {(task.estimate != null || task.dueDate) && (
+      {(task.estimate != null || task.dueDate || task.jiraKey) && (
         <div className="mt-2 flex items-center gap-2 text-[11px] text-neutral-500">
           {task.estimate != null && <span>{task.estimate}h</span>}
           {task.dueDate && <span>{new Date(task.dueDate).toLocaleDateString("vi-VN")}</span>}
+          {task.jiraKey && (
+            <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-blue-400">
+              {task.jiraKey}
+            </span>
+          )}
         </div>
       )}
     </button>

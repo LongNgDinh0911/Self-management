@@ -49,5 +49,5 @@ next-env.d.ts
 # auto-generated agent skill docs (from `prisma init`), not app code
 /.agents
 /.windsurf
-/.claude/skills
+/.claude/skills/prisma-*
 /skills-lock.json
