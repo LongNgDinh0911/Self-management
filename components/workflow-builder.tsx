@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -17,13 +17,19 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { STEP_TYPE_META } from "@/lib/workflow-constants";
-import type { Workflow, WorkflowStep, WorkflowStepType } from "@/app/generated/prisma/client";
+import { STEP_TYPE_META, RUN_STATUS_META } from "@/lib/workflow-constants";
+import type {
+  Workflow,
+  WorkflowStep,
+  WorkflowStepType,
+  WorkflowRun,
+} from "@/app/generated/prisma/client";
 import { StepConfigPanel } from "@/components/workflow-step-panel";
 
 type WorkflowWithSteps = Workflow & { steps: WorkflowStep[] };
 
 const ADDABLE_TYPES: WorkflowStepType[] = ["ai_step", "condition", "action"];
+const ACTIVE_STATUSES = new Set(["pending", "running"]);
 
 export function WorkflowBuilder({
   initialWorkflow,
@@ -40,8 +46,37 @@ export function WorkflowBuilder({
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [testRun, setTestRun] = useState<WorkflowRun | null>(null);
+  const [triggering, setTriggering] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [showLog, setShowLog] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+
+  useEffect(() => {
+    if (!testRun || !ACTIVE_STATUSES.has(testRun.status)) return;
+    const interval = setInterval(async () => {
+      const res = await fetch(`/api/workflow-runs/${testRun.id}`);
+      if (res.ok) setTestRun(await res.json());
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [testRun]);
+
+  async function handleRun() {
+    setTriggering(true);
+    setShowLog(true);
+    const res = await fetch(`/api/workflows/${initialWorkflow.id}/run`, { method: "POST" });
+    setTriggering(false);
+    if (res.ok) setTestRun(await res.json());
+  }
+
+  async function handleStop() {
+    if (!testRun) return;
+    setStopping(true);
+    const res = await fetch(`/api/workflow-runs/${testRun.id}/stop`, { method: "POST" });
+    setStopping(false);
+    if (res.ok) setTestRun(await res.json());
+  }
 
   async function handleSaveHeader() {
     setSaving(true);
@@ -140,13 +175,24 @@ export function WorkflowBuilder({
             >
               {saving ? "Đang lưu..." : "Save"}
             </button>
-            <button
-              disabled
-              title="Chưa khả dụng — sẽ mở khi có execution engine (Phase 9)"
-              className="cursor-not-allowed rounded-md bg-indigo-600/50 px-3 py-1.5 text-xs font-medium text-white opacity-60"
-            >
-              ▷ Run
-            </button>
+            {testRun && ACTIVE_STATUSES.has(testRun.status) ? (
+              <button
+                onClick={handleStop}
+                disabled={stopping}
+                className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+              >
+                {stopping ? "Đang dừng..." : "■ Stop"}
+              </button>
+            ) : (
+              <button
+                onClick={handleRun}
+                disabled={triggering}
+                title="Chạy thử workflow này — không gắn với task nào, {{task.*}} trong prompt sẽ để trống"
+                className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                {triggering ? "Đang trigger..." : "▷ Run"}
+              </button>
+            )}
             <button
               onClick={handleDeleteWorkflow}
               disabled={deleting}
@@ -172,6 +218,48 @@ export function WorkflowBuilder({
             );
           })}
         </div>
+
+        {testRun && showLog && (
+          <div className="border-b border-neutral-800 px-5 py-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${testRun.status === "running" ? "animate-pulse" : ""}`}
+                  style={{ backgroundColor: RUN_STATUS_META[testRun.status].color }}
+                />
+                <span className="text-xs font-medium text-neutral-300">Test run</span>
+                <span
+                  className="rounded-full px-1.5 py-0.5 text-[11px]"
+                  style={{
+                    color: RUN_STATUS_META[testRun.status].color,
+                    backgroundColor: `${RUN_STATUS_META[testRun.status].color}1a`,
+                  }}
+                >
+                  {RUN_STATUS_META[testRun.status].label}
+                </span>
+                {testRun.prUrl && (
+                  <a
+                    href={testRun.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-indigo-400 hover:underline"
+                  >
+                    PR ↗
+                  </a>
+                )}
+              </div>
+              <button
+                onClick={() => setShowLog(false)}
+                className="text-xs text-neutral-500 hover:text-neutral-300"
+              >
+                Đóng
+              </button>
+            </div>
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-xs text-neutral-400">
+              {testRun.log || "(chưa có log)"}
+            </pre>
+          </div>
+        )}
 
         <div className="flex-1 overflow-x-auto p-8">
           <div className="flex items-center gap-0">

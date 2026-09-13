@@ -141,9 +141,17 @@ export function TaskWorkflowRuns({
                 key={run.id}
                 className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2"
               >
-                <button
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setExpandedId(expanded ? null : run.id)}
-                  className="flex w-full items-center justify-between text-left"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setExpandedId(expanded ? null : run.id);
+                    }
+                  }}
+                  className="flex w-full cursor-pointer items-center justify-between text-left"
                 >
                   <div className="flex items-center gap-2">
                     <span
@@ -190,7 +198,7 @@ export function TaskWorkflowRuns({
                     )}
                     <span className="text-neutral-600">{expanded ? "▲" : "▼"}</span>
                   </div>
-                </button>
+                </div>
 
                 {expanded && (
                   <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-xs text-neutral-400">
