@@ -1,4 +1,4 @@
-import type { WorkflowStepType } from "@/app/generated/prisma/client";
+import type { WorkflowStepType, WorkflowRunStatus } from "@/app/generated/prisma/client";
 
 export const STEP_TYPE_META: Record<
   WorkflowStepType,
@@ -22,6 +22,13 @@ export const STEP_TYPE_META: Record<
     color: "#22c55e",
     description: "Hành động cuối, ví dụ tạo Pull Request.",
   },
+};
+
+export const RUN_STATUS_META: Record<WorkflowRunStatus, { label: string; color: string }> = {
+  pending: { label: "Pending", color: "#a3a3a3" },
+  running: { label: "Running", color: "#3b82f6" },
+  success: { label: "Success", color: "#22c55e" },
+  failed: { label: "Failed", color: "#ef4444" },
 };
 
 export type AiStepConfig = { prompt: string };

@@ -25,10 +25,28 @@ export default async function TaskPage({
     notFound();
   }
 
+  const [workflows, workflowRuns] = await Promise.all([
+    prisma.workflow.findMany({
+      where: { projectId: project.id },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, active: true },
+    }),
+    prisma.workflowRun.findMany({
+      where: { taskId: task.id },
+      orderBy: { startedAt: "desc" },
+      include: { workflow: { select: { name: true } } },
+    }),
+  ]);
+
   return (
     <div className="flex h-full flex-col">
       <ProjectHeader project={project} />
-      <TaskDetailPage project={project} task={task} />
+      <TaskDetailPage
+        project={project}
+        task={task}
+        workflows={workflows}
+        workflowRuns={workflowRuns}
+      />
     </div>
   );
 }

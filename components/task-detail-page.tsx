@@ -5,15 +5,30 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import { MarkdownEditor } from "@/components/markdown-editor";
+import { TaskWorkflowRuns } from "@/components/task-workflow-runs";
 import type {
   Project,
   Task,
   TaskPriority,
   TaskStatus,
   TaskType,
+  WorkflowRun,
 } from "@/app/generated/prisma/client";
 
-export function TaskDetailPage({ project, task }: { project: Project; task: Task }) {
+type WorkflowOption = { id: string; name: string; active: boolean };
+type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
+
+export function TaskDetailPage({
+  project,
+  task,
+  workflows,
+  workflowRuns,
+}: {
+  project: Project;
+  task: Task;
+  workflows: WorkflowOption[];
+  workflowRuns: RunWithWorkflow[];
+}) {
   const router = useRouter();
 
   const [title, setTitle] = useState(task.title);
@@ -257,6 +272,8 @@ export function TaskDetailPage({ project, task }: { project: Project; task: Task
             </button>
           </div>
         </div>
+
+        <TaskWorkflowRuns taskId={task.id} workflows={workflows} initialRuns={workflowRuns} />
       </div>
     </div>
   );
