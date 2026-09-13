@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import type { WorkflowRun } from "@/app/generated/prisma/client";
 
 type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
 type WorkflowOption = { id: string; name: string; active: boolean };
+
+const ACTIVE_STATUSES = new Set(["pending", "running"]);
 
 export function TaskWorkflowRuns({
   taskId,
@@ -20,6 +22,35 @@ export function TaskWorkflowRuns({
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(workflows[0]?.id ?? "");
   const [triggering, setTriggering] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const pollingIds = useRef(new Set<string>());
+
+  const hasActiveRun = runs.some((r) => ACTIVE_STATUSES.has(r.status));
+
+  useEffect(() => {
+    if (!hasActiveRun) return;
+
+    const interval = setInterval(async () => {
+      const active = runs.filter((r) => ACTIVE_STATUSES.has(r.status));
+      const updates = await Promise.all(
+        active.map((r) =>
+          fetch(`/api/workflow-runs/${r.id}`)
+            .then((res) => (res.ok ? res.json() : null))
+            .catch(() => null)
+        )
+      );
+      setRuns((prev) => {
+        const byId = new Map(prev.map((r) => [r.id, r]));
+        for (const updated of updates) {
+          if (updated) byId.set(updated.id, updated);
+        }
+        return prev.map((r) => byId.get(r.id) ?? r);
+      });
+    }, 2500);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActiveRun, runs.map((r) => r.id + r.status).join(",")]);
 
   async function handleTrigger() {
     if (!selectedWorkflowId) return;
@@ -41,14 +72,15 @@ export function TaskWorkflowRuns({
 
     const run = await res.json();
     setRuns((prev) => [run, ...prev]);
+    setExpandedId(run.id);
   }
 
   return (
     <div className="mt-8 border-t border-neutral-800 pt-5">
       <h2 className="mb-1 text-sm font-semibold text-neutral-100">Workflow</h2>
       <p className="mb-4 text-xs text-neutral-500">
-        Trigger 1 workflow cho task này. Execution engine (chạy AI thật) chưa được bật — lần chạy
-        sẽ lưu lại ở trạng thái Pending trong lịch sử bên dưới cho tới khi được xác nhận bật.
+        Trigger 1 workflow cho task này — chạy Claude Code trong 1 git worktree riêng của repo đã
+        cấu hình ở Project Settings, rồi tạo PR nếu có thay đổi.
       </p>
 
       {workflows.length === 0 ? (
@@ -92,37 +124,56 @@ export function TaskWorkflowRuns({
         <div className="flex flex-col gap-2">
           {runs.map((run) => {
             const meta = RUN_STATUS_META[run.status];
+            const expanded = expandedId === run.id;
             return (
               <div
                 key={run.id}
-                className="flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2"
+                className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2"
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: meta.color }}
-                  />
-                  <span className="text-sm text-neutral-200">{run.workflow.name}</span>
-                  <span
-                    className="rounded-full px-1.5 py-0.5 text-[11px]"
-                    style={{ color: meta.color, backgroundColor: `${meta.color}1a` }}
-                  >
-                    {meta.label}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-neutral-500">
-                  {run.prUrl && (
-                    <a
-                      href={run.prUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-indigo-400 hover:underline"
+                <button
+                  onClick={() => setExpandedId(expanded ? null : run.id)}
+                  className="flex w-full items-center justify-between text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        run.status === "running" ? "animate-pulse" : ""
+                      }`}
+                      style={{ backgroundColor: meta.color }}
+                    />
+                    <span className="text-sm text-neutral-200">{run.workflow.name}</span>
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[11px]"
+                      style={{ color: meta.color, backgroundColor: `${meta.color}1a` }}
                     >
-                      PR ↗
-                    </a>
-                  )}
-                  <span>{new Date(run.startedAt).toLocaleString("vi-VN")}</span>
-                </div>
+                      {meta.label}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-neutral-500">
+                    {run.prUrl && (
+                      <a
+                        href={run.prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-indigo-400 hover:underline"
+                      >
+                        PR ↗
+                      </a>
+                    )}
+                    {run.branchName && !run.prUrl && (
+                      <span className="text-neutral-600">{run.branchName}</span>
+                    )}
+                    <span>{new Date(run.startedAt).toLocaleString("vi-VN")}</span>
+                    <span className="text-neutral-600">{expanded ? "▲" : "▼"}</span>
+                  </div>
+                </button>
+
+                {expanded && (
+                  <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-xs text-neutral-400">
+                    {run.log || "(chưa có log)"}
+                  </pre>
+                )}
               </div>
             );
           })}
