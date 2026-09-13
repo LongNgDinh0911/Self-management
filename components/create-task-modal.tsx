@@ -28,7 +28,6 @@ export function CreateTaskModal({
   const [type, setType] = useState<TaskType>("task");
   const [status, setStatus] = useState<TaskStatus>(defaultStatus);
   const [priority, setPriority] = useState<TaskPriority>("none");
-  const [estimate, setEstimate] = useState("");
   const [dueDate, setDueDate] = useState("");
 
   const [jiraRef, setJiraRef] = useState("");
@@ -55,7 +54,6 @@ export function CreateTaskModal({
         type,
         status,
         priority,
-        estimate: estimate === "" ? null : Number(estimate),
         dueDate: dueDate || null,
         ...(mode === "jira" ? { jiraKey: jiraParsed.jiraKey, jiraUrl: jiraParsed.jiraUrl } : {}),
       }),
@@ -181,17 +179,6 @@ export function CreateTaskModal({
                 </option>
               ))}
             </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-neutral-400">Estimate (giờ)</label>
-            <input
-              type="number"
-              min={0}
-              value={estimate}
-              onChange={(e) => setEstimate(e.target.value)}
-              className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
-            />
           </div>
 
           <div>

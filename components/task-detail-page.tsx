@@ -36,7 +36,6 @@ export function TaskDetailPage({
   const [status, setStatus] = useState<TaskStatus>(task.status);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [type, setType] = useState<TaskType>(task.type);
-  const [estimate, setEstimate] = useState(task.estimate?.toString() ?? "");
   const [dueDate, setDueDate] = useState(
     task.dueDate ? new Date(task.dueDate).toISOString().slice(0, 10) : ""
   );
@@ -53,7 +52,6 @@ export function TaskDetailPage({
     status !== task.status ||
     priority !== task.priority ||
     type !== task.type ||
-    estimate !== (task.estimate?.toString() ?? "") ||
     dueDate !== (task.dueDate ? new Date(task.dueDate).toISOString().slice(0, 10) : "");
 
   async function handleSave() {
@@ -70,7 +68,6 @@ export function TaskDetailPage({
         status,
         priority,
         type,
-        estimate: estimate === "" ? null : Number(estimate),
         dueDate: dueDate === "" ? null : dueDate,
       }),
     });
@@ -193,19 +190,6 @@ export function TaskDetailPage({
                   </option>
                 ))}
               </select>
-            </Field>
-
-            <Field label="Estimate (giờ)">
-              <input
-                type="number"
-                min={0}
-                value={estimate}
-                onChange={(e) => {
-                  setEstimate(e.target.value);
-                  setSaved(false);
-                }}
-                className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
-              />
             </Field>
 
             <Field label="Due date">
