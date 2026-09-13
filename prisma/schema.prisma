@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum TaskStatus {
+  backlog
+  todo
+  in_progress
+  in_review
+  done
+}
+
+enum TaskPriority {
+  none
+  low
+  medium
+  high
+  urgent
+}
+
+model Project {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  color     String   @default("#6366f1")
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  tasks     Task[]
+  labels    Label[]
+  nextTaskNumber Int @default(1)
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  number      Int
+  title       String
+  description String       @default("")
+  status      TaskStatus   @default(backlog)
+  priority    TaskPriority @default(none)
+  estimate    Int?
+  dueDate     DateTime?
+  order       Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+
+  labels      TaskLabel[]
+
+  @@unique([projectId, number])
+  @@index([projectId, status])
+}
+
+model Label {
+  id        String      @id @default(cuid())
+  name      String
+  color     String      @default("#64748b")
+
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  tasks     TaskLabel[]
+
+  @@unique([projectId, name])
+}
+
+model TaskLabel {
+  task    Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId  String
+  label   Label  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+  labelId String
+
+  @@id([taskId, labelId])
+}
