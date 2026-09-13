@@ -254,7 +254,7 @@ function Column({
           onClick={() => setAdding((v) => !v)}
           className="rounded px-1.5 text-sm text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200"
         >
-          +
+          <PlusIcon className="h-3.5 w-3.5" />
         </button>
       </div>
 
