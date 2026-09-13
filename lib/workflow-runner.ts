@@ -144,12 +144,18 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
 
   async function fail(message: string): Promise<void> {
     await appendLog(ctx, `✕ ${message}`);
-    const updated = await prisma.workflowRun.update({
-      where: { id: runId },
+    // Guarded: if a stop request already marked this run "cancelled" while
+    // we were mid-execution (e.g. the in-process AbortController couldn't be
+    // found), this must not resurrect it back to a non-cancelled status.
+    const { count } = await prisma.workflowRun.updateMany({
+      where: { id: runId, status: "running" },
       data: { status: "failed", finishedAt: new Date() },
     });
-    emitWorkflowRunUpdate({ ...updated, workflow: { name: ctx.workflowName } });
-    await markTaskInReview();
+    if (count > 0) {
+      const updated = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
+      emitWorkflowRunUpdate({ ...updated, workflow: { name: ctx.workflowName } });
+      await markTaskInReview();
+    }
   }
 
   // A run's task moves to "in_progress" the moment its workflow starts, and
@@ -180,7 +186,16 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const project = workflow.project;
   ctx.workflowName = workflow.name;
 
-  const runningUpdate = await prisma.workflowRun.update({ where: { id: runId }, data: { status: "running" } });
+  // Atomically claim the run: only proceed if it's still "pending". If a
+  // stop request already flipped it to "cancelled" in the gap between run
+  // creation and this point, count is 0 and we bail out without ever having
+  // registered anything that needs cleanup.
+  const claimed = await prisma.workflowRun.updateMany({
+    where: { id: runId, status: "pending" },
+    data: { status: "running" },
+  });
+  if (claimed.count === 0) return;
+  const runningUpdate = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
   emitWorkflowRunUpdate({ ...runningUpdate, workflow: { name: workflow.name } });
   await markTaskInProgress();
   await appendLog(ctx, `Bắt đầu workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`);
@@ -335,12 +350,15 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
       }
 
       await appendLog(ctx, `\n✓ Workflow hoàn tất.`);
-      const successUpdate = await prisma.workflowRun.update({
-        where: { id: runId },
+      const { count: successCount } = await prisma.workflowRun.updateMany({
+        where: { id: runId, status: "running" },
         data: { status: "success", branchName, prUrl, finishedAt: new Date() },
       });
-      emitWorkflowRunUpdate({ ...successUpdate, workflow: { name: ctx.workflowName } });
-      await markTaskInReview();
+      if (successCount > 0) {
+        const successUpdate = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
+        emitWorkflowRunUpdate({ ...successUpdate, workflow: { name: ctx.workflowName } });
+        await markTaskInReview();
+      }
     } catch (err) {
       if (err instanceof WorkflowCancelledError) {
         await appendLog(ctx, `\n✕ ${err.message}`);

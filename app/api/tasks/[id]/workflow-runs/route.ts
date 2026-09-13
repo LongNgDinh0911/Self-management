@@ -32,6 +32,16 @@ export async function POST(
     return NextResponse.json({ error: "Không tìm thấy workflow" }, { status: 404 });
   }
 
+  const activeRun = await prisma.workflowRun.findFirst({
+    where: { taskId, status: { in: ["pending", "running"] } },
+  });
+  if (activeRun) {
+    return NextResponse.json(
+      { error: "Task này đang có 1 workflow chạy, dừng nó trước khi chạy tiếp." },
+      { status: 409 }
+    );
+  }
+
   const run = await prisma.workflowRun.create({
     data: { workflowId, taskId, status: "pending" },
     include: { workflow: { select: { name: true } } },

@@ -51,6 +51,7 @@ export function WorkflowBuilder({
   const [triggering, setTriggering] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -63,10 +64,16 @@ export function WorkflowBuilder({
 
   async function handleRun() {
     setTriggering(true);
-    setShowLog(true);
+    setRunError(null);
     const res = await fetch(`/api/workflows/${initialWorkflow.id}/run`, { method: "POST" });
     setTriggering(false);
-    if (res.ok) setTestRun(await res.json());
+    if (res.ok) {
+      setShowLog(true);
+      setTestRun(await res.json());
+    } else {
+      const body = await res.json().catch(() => null);
+      setRunError(body?.error ?? "Không trigger được workflow");
+    }
   }
 
   async function handleStop() {
@@ -202,6 +209,12 @@ export function WorkflowBuilder({
             </button>
           </div>
         </div>
+
+        {runError && (
+          <p className="border-b border-neutral-800 bg-red-500/10 px-5 py-2 text-xs text-red-400">
+            {runError}
+          </p>
+        )}
 
         <div className="flex items-center gap-2 border-b border-neutral-800 px-5 py-2">
           {ADDABLE_TYPES.map((type) => {

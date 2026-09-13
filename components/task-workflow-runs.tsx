@@ -46,7 +46,8 @@ export function TaskWorkflowRuns({
     setTriggering(false);
 
     if (!res.ok) {
-      setError("Không trigger được workflow");
+      const body = await res.json().catch(() => null);
+      setError(body?.error ?? "Không trigger được workflow");
       return;
     }
 
