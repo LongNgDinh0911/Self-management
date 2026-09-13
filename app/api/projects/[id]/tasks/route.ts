@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createTask } from "@/lib/tasks";
 import type { TaskPriority, TaskStatus, TaskType } from "@/app/generated/prisma/client";
 
 export async function POST(
@@ -8,47 +8,21 @@ export async function POST(
 ) {
   const { id: projectId } = await params;
   const body = await request.json();
-  const title = String(body.title ?? "").trim();
-  const status = (body.status as TaskStatus) ?? "backlog";
-  const priority = (body.priority as TaskPriority) ?? "none";
-  const type = (body.type as TaskType) ?? "task";
-  const description = typeof body.description === "string" ? body.description : "";
-  const estimate = typeof body.estimate === "number" ? body.estimate : null;
-  const dueDate = body.dueDate ? new Date(body.dueDate) : null;
-  const jiraKey = typeof body.jiraKey === "string" ? body.jiraKey.trim() || null : null;
-  const jiraUrl = typeof body.jiraUrl === "string" ? body.jiraUrl.trim() || null : null;
 
-  if (!title) {
+  if (!String(body.title ?? "").trim()) {
     return NextResponse.json({ error: "Thiếu tiêu đề task" }, { status: 400 });
   }
 
-  const task = await prisma.$transaction(async (tx) => {
-    const project = await tx.project.update({
-      where: { id: projectId },
-      data: { nextTaskNumber: { increment: 1 } },
-    });
-
-    const lastInColumn = await tx.task.findFirst({
-      where: { projectId, status },
-      orderBy: { order: "desc" },
-    });
-
-    return tx.task.create({
-      data: {
-        projectId,
-        number: project.nextTaskNumber - 1,
-        title,
-        status,
-        priority,
-        type,
-        description,
-        estimate,
-        dueDate,
-        jiraKey,
-        jiraUrl,
-        order: (lastInColumn?.order ?? -1) + 1,
-      },
-    });
+  const task = await createTask(projectId, {
+    title: String(body.title ?? ""),
+    description: typeof body.description === "string" ? body.description : "",
+    status: body.status as TaskStatus | undefined,
+    priority: body.priority as TaskPriority | undefined,
+    type: body.type as TaskType | undefined,
+    estimate: typeof body.estimate === "number" ? body.estimate : null,
+    dueDate: body.dueDate ?? null,
+    jiraKey: typeof body.jiraKey === "string" ? body.jiraKey : null,
+    jiraUrl: typeof body.jiraUrl === "string" ? body.jiraUrl : null,
   });
 
   return NextResponse.json(task, { status: 201 });

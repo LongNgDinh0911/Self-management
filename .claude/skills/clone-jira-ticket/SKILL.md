@@ -23,6 +23,26 @@ in a fresh session), load them first in one batch:
 ToolSearch: "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__get_page_text,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__tabs_close_mcp"
 ```
 
+## MCP connection
+
+This app exposes an MCP server at `/api/mcp` (bearer-token auth via
+`MCP_ACCESS_TOKEN` in `.env`) with `list_projects`/`create_task` tools — see
+`app/api/mcp/route.ts`. It's meant to be added once as a named MCP server
+(e.g. `self-management`) in Claude Code's config, from any machine on the
+same LAN as the one running `npm run dev`:
+
+```bash
+claude mcp add --transport http self-management http://localhost:3000/api/mcp \
+  --header "Authorization: Bearer <MCP_ACCESS_TOKEN from .env>"
+```
+
+From another machine on the LAN, replace `localhost` with this machine's LAN
+IP (shown in the `npm run dev` output as "Network: http://<ip>:3000").
+Check `claude mcp add --help` if the flags above don't match the installed
+CLI version. If you can't confirm the server is connected (tools not showing
+up as `list_projects`/`create_task` from `self-management`), fall back to
+the curl steps below rather than guessing at tool names.
+
 ## Two supported inputs
 
 1. **Issue key** — e.g. `PROJ-123`. Need a Jira site to build the URL: use
@@ -33,8 +53,14 @@ ToolSearch: "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrom
 
 ## Steps
 
-1. **Authenticate to the local app and find the target project.** Read
-   `APP_PIN` from this repo's `.env`, then:
+1. **Find the target project.** Call the `list_projects` MCP tool from the
+   `self-management` MCP server (this app's own `/api/mcp` endpoint — see
+   "MCP connection" below if it's not connected in this session). Match by
+   board key the user named (e.g. "DEV" — ask if not given). Note its
+   `jiraSite` field for step 2.
+
+   If the `self-management` MCP server isn't connected, fall back to curl +
+   the app's PIN (read `APP_PIN` from this repo's `.env`):
 
    ```bash
    curl -s -c /tmp/self-mgmt-cookies.txt -X POST http://localhost:3000/api/auth/login \
@@ -43,12 +69,9 @@ ToolSearch: "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrom
    curl -s -b /tmp/self-mgmt-cookies.txt http://localhost:3000/api/projects
    ```
 
-   If curl fails to connect, the dev server likely isn't running — tell the
-   user rather than starting it yourself unprompted, unless they've already
-   asked you to run the app this session.
-
-   Match the target project (by board key the user named, e.g. "DEV" — ask
-   if not given). Note its local `id` and its `jiraSite` field.
+   If neither works, the dev server likely isn't running — tell the user
+   rather than starting it yourself unprompted, unless they've already asked
+   you to run the app this session.
 
 2. **Resolve the ticket URL** (see "Two supported inputs" above).
 
@@ -95,7 +118,22 @@ ToolSearch: "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrom
    statuses → `in_progress`, done-looking statuses (Done, Closed,
    Resolved...) → `done`. When genuinely ambiguous, default to `backlog`.
 
-5. **Create the task:**
+5. **Create the task** with the `create_task` MCP tool:
+
+   ```
+   create_task({
+     projectKey: "<board key, e.g. DEV>",
+     title: "<summary>",
+     description: "<plain-text description>",
+     type: "<mapped type>",
+     priority: "<mapped priority>",
+     status: "<mapped status>",
+     jiraKey: "<issue key>",
+     jiraUrl: "<ticket url>",
+   })
+   ```
+
+   Falling back to curl if the MCP server isn't connected:
 
    ```bash
    curl -s -b /tmp/self-mgmt-cookies.txt -X POST \
@@ -111,6 +149,9 @@ ToolSearch: "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrom
        "jiraUrl": "<ticket url>"
      }'
    ```
+   (`<projectId>` here is the project's local `id`, not its `key` — get it
+   from `GET /api/projects` with the login cookie, since the MCP tool takes
+   `projectKey` but the REST route needs the internal id.)
 
 6. **Report back**: the new task's number (e.g. `DEV-9`), noting it carries
    a "Jira: PROJ-123 ↗" link back to the original ticket (visible on the
