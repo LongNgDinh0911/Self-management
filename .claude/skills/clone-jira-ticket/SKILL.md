@@ -7,13 +7,17 @@ description: Clone a Jira ticket into a task in this project's local Self Manage
 
 This skill creates a task in the Self Management app (this repo) from a Jira
 issue, using the Atlassian MCP tools already connected in this session
-(`getJiraIssue`, `getAccessibleAtlassianResources`, etc). There is no
-separate Jira REST integration inside the app itself — this skill IS the
-"fetch from Jira" feature, run by you (Claude Code) on the user's behalf.
+(`getJiraIssue`, `getAccessibleAtlassianResources`, etc).
 
-The app's Create Task form has its own "Jira ticket" field, but that one
-only *stores* a pasted link/key as-is — it does not fetch anything (a
-browser button can't call MCP tools). This skill is the actual fetch path.
+Note: the app's own Create Task form ("Từ Jira link" tab) now ALSO fetches
+for real, via its own Jira REST integration (`app/api/jira/fetch/route.ts`,
+using `JIRA_EMAIL`/`JIRA_API_TOKEN` from `.env`) — that's the normal path
+for a user sitting at the browser. This skill is for when the user is
+working with you in chat instead: creating a task without touching the
+browser, bulk-cloning several tickets, or as a fallback if `.env` isn't
+configured yet. Both paths use the same field mapping and both write
+`jiraKey`/`jiraUrl` onto the task; they just fetch through different
+channels (MCP here vs. direct REST call in the app).
 
 ## Two supported inputs
 
