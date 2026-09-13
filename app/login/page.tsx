@@ -18,8 +18,7 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function submitPin() {
     setError(null);
     setLoading(true);
 
@@ -42,6 +41,11 @@ function LoginForm() {
     router.refresh();
   }
 
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    submitPin();
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-neutral-950 px-4">
       <form
@@ -59,6 +63,12 @@ function LoginForm() {
           autoFocus
           value={pin}
           onChange={(e) => setPin(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (!loading && pin.length > 0) submitPin();
+            }
+          }}
           placeholder="••••••"
           className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-center text-lg tracking-widest text-neutral-100 outline-none focus:border-indigo-500"
         />
