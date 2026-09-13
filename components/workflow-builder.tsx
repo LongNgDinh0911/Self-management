@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   DndContext,
   PointerSensor,
@@ -24,13 +25,21 @@ type WorkflowWithSteps = Workflow & { steps: WorkflowStep[] };
 
 const ADDABLE_TYPES: WorkflowStepType[] = ["ai_step", "condition", "action"];
 
-export function WorkflowBuilder({ initialWorkflow }: { initialWorkflow: WorkflowWithSteps }) {
+export function WorkflowBuilder({
+  initialWorkflow,
+  projectKey,
+}: {
+  initialWorkflow: WorkflowWithSteps;
+  projectKey: string;
+}) {
+  const router = useRouter();
   const [name, setName] = useState(initialWorkflow.name);
   const [active, setActive] = useState(initialWorkflow.active);
   const [steps, setSteps] = useState(initialWorkflow.steps);
   const [selected, setSelected] = useState<"trigger" | string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -43,6 +52,17 @@ export function WorkflowBuilder({ initialWorkflow }: { initialWorkflow: Workflow
     });
     setSaving(false);
     if (res.ok) setSavedAt(Date.now());
+  }
+
+  async function handleDeleteWorkflow() {
+    if (!confirm("Xóa workflow này? Hành động này không thể hoàn tác.")) return;
+    setDeleting(true);
+    const res = await fetch(`/api/workflows/${initialWorkflow.id}`, { method: "DELETE" });
+    setDeleting(false);
+    if (res.ok) {
+      router.push(`/p/${projectKey}/workflows`);
+      router.refresh();
+    }
   }
 
   async function handleAddStep(type: WorkflowStepType) {
@@ -126,6 +146,14 @@ export function WorkflowBuilder({ initialWorkflow }: { initialWorkflow: Workflow
               className="cursor-not-allowed rounded-md bg-indigo-600/50 px-3 py-1.5 text-xs font-medium text-white opacity-60"
             >
               ▷ Run
+            </button>
+            <button
+              onClick={handleDeleteWorkflow}
+              disabled={deleting}
+              title="Xóa workflow"
+              className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+            >
+              {deleting ? "Đang xóa..." : "Xóa"}
             </button>
           </div>
         </div>
