@@ -3,6 +3,7 @@ import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { prisma } from "@/lib/prisma";
+import { emitWorkflowRunUpdate } from "@/lib/socket";
 import type {
   AiStepConfig,
   ConditionStepConfig,
@@ -16,6 +17,7 @@ const COMMAND_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 type RunContext = {
   runId: string;
   log: string;
+  workflowName: string;
 };
 
 class WorkflowCancelledError extends Error {
@@ -45,7 +47,8 @@ export function stopWorkflowRun(runId: string): boolean {
 
 async function appendLog(ctx: RunContext, line: string) {
   ctx.log += (ctx.log ? "\n" : "") + line;
-  await prisma.workflowRun.update({ where: { id: ctx.runId }, data: { log: ctx.log } });
+  const updated = await prisma.workflowRun.update({ where: { id: ctx.runId }, data: { log: ctx.log } });
+  emitWorkflowRunUpdate({ ...updated, workflow: { name: ctx.workflowName } });
 }
 
 function renderTemplate(
@@ -137,17 +140,21 @@ function run(
 }
 
 export async function executeWorkflowRun(runId: string): Promise<void> {
-  const ctx: RunContext = { runId, log: "" };
+  const ctx: RunContext = { runId, log: "", workflowName: "" };
 
   async function fail(message: string): Promise<void> {
     await appendLog(ctx, `✕ ${message}`);
     // Guarded: if a stop request already marked this run "cancelled" while
     // we were mid-execution (e.g. the in-process AbortController couldn't be
     // found), this must not resurrect it back to a non-cancelled status.
-    await prisma.workflowRun.updateMany({
+    const { count } = await prisma.workflowRun.updateMany({
       where: { id: runId, status: "running" },
       data: { status: "failed", finishedAt: new Date() },
     });
+    if (count > 0) {
+      const updated = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
+      emitWorkflowRunUpdate({ ...updated, workflow: { name: ctx.workflowName } });
+    }
   }
 
   const run_ = await prisma.workflowRun.findUnique({
@@ -161,6 +168,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
 
   const { workflow, task } = run_;
   const project = workflow.project;
+  ctx.workflowName = workflow.name;
 
   // Atomically claim the run: only proceed if it's still "pending". If a
   // stop request already flipped it to "cancelled" in the gap between run
@@ -171,6 +179,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     data: { status: "running" },
   });
   if (claimed.count === 0) return;
+  const runningUpdate = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
+  emitWorkflowRunUpdate({ ...runningUpdate, workflow: { name: workflow.name } });
 
   await appendLog(ctx, `Bắt đầu workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`);
 
@@ -324,17 +334,22 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
       }
 
       await appendLog(ctx, `\n✓ Workflow hoàn tất.`);
-      await prisma.workflowRun.updateMany({
+      const { count: successCount } = await prisma.workflowRun.updateMany({
         where: { id: runId, status: "running" },
         data: { status: "success", branchName, prUrl, finishedAt: new Date() },
       });
+      if (successCount > 0) {
+        const successUpdate = await prisma.workflowRun.findUniqueOrThrow({ where: { id: runId } });
+        emitWorkflowRunUpdate({ ...successUpdate, workflow: { name: ctx.workflowName } });
+      }
     } catch (err) {
       if (err instanceof WorkflowCancelledError) {
         await appendLog(ctx, `\n✕ ${err.message}`);
-        await prisma.workflowRun.update({
+        const cancelledUpdate = await prisma.workflowRun.update({
           where: { id: runId },
           data: { status: "cancelled", finishedAt: new Date() },
         });
+        emitWorkflowRunUpdate({ ...cancelledUpdate, workflow: { name: ctx.workflowName } });
       } else {
         const message = err instanceof Error ? err.message : String(err);
         await fail(message);

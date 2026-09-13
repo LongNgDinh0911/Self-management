@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -18,6 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { STEP_TYPE_META, RUN_STATUS_META } from "@/lib/workflow-constants";
+import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
 import type {
   Workflow,
   WorkflowStep,
@@ -54,14 +55,12 @@ export function WorkflowBuilder({
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  useEffect(() => {
-    if (!testRun || !ACTIVE_STATUSES.has(testRun.status)) return;
-    const interval = setInterval(async () => {
-      const res = await fetch(`/api/workflow-runs/${testRun.id}`);
-      if (res.ok) setTestRun(await res.json());
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [testRun]);
+  const activeTestRunIds =
+    testRun && ACTIVE_STATUSES.has(testRun.status) ? [testRun.id] : [];
+
+  useWorkflowRunUpdates<WorkflowRun>(activeTestRunIds, (updated) => {
+    setTestRun((prev) => (prev && prev.id === updated.id ? updated : prev));
+  });
 
   async function handleRun() {
     setTriggering(true);

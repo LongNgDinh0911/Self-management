@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { stopWorkflowRun } from "@/lib/workflow-runner";
+import { emitWorkflowRunUpdate } from "@/lib/socket";
 
 const STOPPABLE_STATUSES = new Set(["pending", "running"]);
 
@@ -9,7 +10,10 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const run = await prisma.workflowRun.findUnique({ where: { id } });
+  const run = await prisma.workflowRun.findUnique({
+    where: { id },
+    include: { workflow: { select: { name: true } } },
+  });
   if (!run) {
     return NextResponse.json({ error: "Không tìm thấy run" }, { status: 404 });
   }
@@ -19,15 +23,19 @@ export async function POST(
 
   // If the runner is executing in this process, aborting its controller
   // kills the in-flight child process and the runner itself marks the run
-  // "cancelled". Otherwise (e.g. dev server restarted) there's no process
-  // to kill, so just mark it cancelled directly.
+  // "cancelled" (and emits the update). Otherwise (e.g. dev server
+  // restarted) there's no process to kill, so mark it cancelled directly
+  // and emit here.
   const stoppedInProcess = stopWorkflowRun(id);
-  const updated = stoppedInProcess
-    ? run
-    : await prisma.workflowRun.update({
-        where: { id },
-        data: { status: "cancelled", finishedAt: new Date() },
-      });
+  let updated = run;
+  if (!stoppedInProcess) {
+    updated = await prisma.workflowRun.update({
+      where: { id },
+      data: { status: "cancelled", finishedAt: new Date() },
+      include: { workflow: { select: { name: true } } },
+    });
+    emitWorkflowRunUpdate(updated);
+  }
 
   return NextResponse.json(updated);
 }
