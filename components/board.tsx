@@ -354,9 +354,8 @@ function TaskCard({
         )}
       </div>
       <p className="line-clamp-2 text-sm text-neutral-100">{task.title}</p>
-      {(task.estimate != null || task.dueDate || task.jiraKey) && (
+      {(task.dueDate || task.jiraKey) && (
         <div className="mt-2 flex items-center gap-2 text-[11px] text-neutral-500">
-          {task.estimate != null && <span>{task.estimate}h</span>}
           {task.dueDate && <span>{new Date(task.dueDate).toLocaleDateString("vi-VN")}</span>}
           {task.jiraKey && (
             <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-blue-400">
