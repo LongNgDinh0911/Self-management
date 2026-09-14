@@ -347,10 +347,14 @@ function TaskCard({
         </span>
         {task.priority !== "none" && (
           <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: priority.color }}
-            title={priority.label}
-          />
+            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium"
+            style={{
+              backgroundColor: `${priority.color}1A`,
+              color: priority.color,
+            }}
+          >
+            {priority.label}
+          </span>
         )}
       </div>
       <p className="line-clamp-2 text-sm text-neutral-100">{task.title}</p>
