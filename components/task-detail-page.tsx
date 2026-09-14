@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
-import { MarkdownEditor, MarkdownView } from "@/components/markdown-editor";
+import { MarkdownEditor } from "@/components/markdown-editor";
 import { TaskWorkflowRuns } from "@/components/task-workflow-runs";
 import type {
   Project,
@@ -36,6 +36,7 @@ export function TaskDetailPage({
 
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
+  const [planning, setPlanning] = useState(task.planning ?? "");
   const [status, setStatus] = useState<TaskStatus>(task.status);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [type, setType] = useState<TaskType>(task.type);
@@ -52,6 +53,7 @@ export function TaskDetailPage({
   const dirty =
     title !== task.title ||
     description !== task.description ||
+    planning !== (task.planning ?? "") ||
     status !== task.status ||
     priority !== task.priority ||
     type !== task.type ||
@@ -68,6 +70,7 @@ export function TaskDetailPage({
       body: JSON.stringify({
         title: title.trim(),
         description,
+        planning,
         status,
         priority,
         type,
@@ -144,15 +147,19 @@ export function TaskDetailPage({
 
         {activeTab === "workflow" ? (
           <TaskWorkflowRuns taskId={task.id} workflows={workflows} initialRuns={workflowRuns} />
-        ) : activeTab === "planning" ? (
-          <div className="rounded-md border border-neutral-800 bg-neutral-900 px-4 py-3">
-            <MarkdownView
-              value={task.planning ?? ""}
-              emptyText="Chưa có planning. Chạy 1 workflow có node Planning để tự động tạo."
-            />
-          </div>
         ) : (
         <>
+        {activeTab === "planning" ? (
+          <MarkdownEditor
+            value={planning}
+            onChange={(v) => {
+              setPlanning(v);
+              setSaved(false);
+            }}
+            rows={18}
+            placeholder="Chưa có planning. Có thể tự viết tay hoặc chạy workflow có node Planning để AI tạo."
+          />
+        ) : (
         <div className="flex flex-col gap-8 lg:flex-row">
           <div className="min-w-0 flex-1">
             <input
@@ -246,11 +253,14 @@ export function TaskDetailPage({
             </div>
           </div>
         </div>
+        )}
 
         {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
 
         <div className="mt-6 flex items-center justify-between border-t border-neutral-800 pt-4">
-          {!confirmDelete ? (
+          {activeTab !== "detail" ? (
+            <span />
+          ) : !confirmDelete ? (
             <button
               onClick={() => setConfirmDelete(true)}
               className="text-sm text-red-400 hover:text-red-300"

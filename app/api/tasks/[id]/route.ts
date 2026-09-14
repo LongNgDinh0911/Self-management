@@ -12,6 +12,7 @@ export async function PATCH(
   const data: Record<string, unknown> = {};
   if (typeof body.title === "string") data.title = body.title.trim();
   if (typeof body.description === "string") data.description = body.description;
+  if (typeof body.planning === "string") data.planning = body.planning;
   if (typeof body.status === "string") data.status = body.status as TaskStatus;
   if (typeof body.priority === "string") data.priority = body.priority as TaskPriority;
   if (typeof body.type === "string") data.type = body.type as TaskType;
