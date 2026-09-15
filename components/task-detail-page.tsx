@@ -129,17 +129,6 @@ export function TaskDetailPage({
               <ArrowTopRightOnSquareIcon className="h-3 w-3" />
             </a>
           )}
-          {task.prUrl && (
-            <a
-              href={task.prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="ml-2 flex items-center gap-1 rounded bg-indigo-500/10 px-1.5 py-0.5 text-xs text-indigo-400 hover:underline"
-            >
-              PR{prNumberFromUrl(task.prUrl) ? ` #${prNumberFromUrl(task.prUrl)}` : ""}
-              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
-            </a>
-          )}
           {saved && !dirty && <span className="ml-auto text-xs text-emerald-400">Đã lưu</span>}
         </div>
 
@@ -214,6 +203,26 @@ export function TaskDetailPage({
                   </option>
                 ))}
               </select>
+            </Field>
+
+            <Field label="PR">
+              {task.prUrl ? (
+                <div className="flex w-full items-center rounded-md border border-transparent px-2 py-1.5">
+                  <a
+                    href={task.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1 text-sm text-indigo-400 hover:underline"
+                  >
+                    PR{prNumberFromUrl(task.prUrl) ? ` #${prNumberFromUrl(task.prUrl)}` : ""}
+                    <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+                  </a>
+                </div>
+              ) : (
+                <div className="flex w-full items-center rounded-md border border-transparent px-2 py-1.5 text-sm text-neutral-600">
+                  —
+                </div>
+              )}
             </Field>
 
             <Field label="Priority">
