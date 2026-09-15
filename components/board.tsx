@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -23,9 +23,21 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { PlusIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
-import type { Project, Task, TaskStatus } from "@/app/generated/prisma/client";
+import { RUN_STATUS_META } from "@/lib/workflow-constants";
+import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
+import type {
+  Project,
+  Task as PrismaTask,
+  TaskStatus,
+  WorkflowRun,
+} from "@/app/generated/prisma/client";
 import { ProjectHeader } from "@/components/project-header";
 import { CreateTaskModal } from "@/components/create-task-modal";
+
+type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
+type Task = PrismaTask & { workflowRuns: RunWithWorkflow[] };
+
+const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
 
 type ColumnsState = Record<TaskStatus, Task[]>;
 
@@ -54,9 +66,49 @@ export function Board({
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
+  // Re-derive columns whenever the server hands us a new initialTasks
+  // snapshot (e.g. after router.refresh()), so a fresh page/socket-driven
+  // fetch actually reaches the board's local drag-and-drop state.
+  const [prevInitialTasks, setPrevInitialTasks] = useState(initialTasks);
+  if (initialTasks !== prevInitialTasks) {
+    setPrevInitialTasks(initialTasks);
+    setColumns(groupTasks(initialTasks));
+  }
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
   );
+
+  const activeRunIds = Object.values(columns)
+    .flat()
+    .flatMap((task) => task.workflowRuns)
+    .filter((run) => ACTIVE_RUN_STATUSES.has(run.status))
+    .map((run) => run.id);
+
+  useWorkflowRunUpdates<RunWithWorkflow>(activeRunIds, (updatedRun) => {
+    if (!updatedRun.taskId) return;
+    setColumns((prev) => {
+      const status = (Object.keys(prev) as TaskStatus[]).find((s) =>
+        prev[s].some((t) => t.id === updatedRun.taskId)
+      );
+      if (!status) return prev;
+      return {
+        ...prev,
+        [status]: prev[status].map((t) =>
+          t.id === updatedRun.taskId ? { ...t, workflowRuns: [updatedRun] } : t
+        ),
+      };
+    });
+  });
+
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") router.refresh();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [router]);
 
   function findContainer(id: string): TaskStatus | undefined {
     if (STATUS_COLUMNS.some((c) => c.key === id)) return id as TaskStatus;
@@ -172,7 +224,7 @@ export function Board({
               onTaskCreated={(task) =>
                 setColumns((prev) => ({
                   ...prev,
-                  [task.status]: [...prev[task.status], task],
+                  [task.status]: [...prev[task.status], { ...task, workflowRuns: [] }],
                 }))
               }
             />
@@ -195,7 +247,7 @@ export function Board({
           onCreated={(task) => {
             setColumns((prev) => ({
               ...prev,
-              [task.status]: [...prev[task.status], task],
+              [task.status]: [...prev[task.status], { ...task, workflowRuns: [] }],
             }));
             setShowCreateModal(false);
           }}
@@ -220,7 +272,7 @@ function Column({
   projectId: string;
   projectKey: string;
   onTaskClick: (task: Task) => void;
-  onTaskCreated: (task: Task) => void;
+  onTaskCreated: (task: PrismaTask) => void;
 }) {
   const { setNodeRef } = useDroppable({ id: status });
   const [adding, setAdding] = useState(false);
@@ -333,6 +385,9 @@ function TaskCard({
 }) {
   const priority = PRIORITY_META[task.priority];
   const type = TASK_TYPE_META[task.type];
+  const latestRun = task.workflowRuns[0];
+  const runMeta = latestRun ? RUN_STATUS_META[latestRun.status] : null;
+  const runActive = latestRun ? ACTIVE_RUN_STATUSES.has(latestRun.status) : false;
   return (
     <button
       onClick={onClick}
@@ -344,6 +399,22 @@ function TaskCard({
         <span className="flex items-center gap-1 text-[11px] text-neutral-500">
           <type.icon className="h-3 w-3 shrink-0" style={{ color: type.color }} aria-label={type.label} />
           {projectKey}-{task.number}
+          {runMeta && (
+            <span className="relative ml-1 inline-flex h-1.5 w-1.5 shrink-0" title={runMeta.label}>
+              {runActive && (
+                <span
+                  className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
+                  style={{ backgroundColor: runMeta.color }}
+                />
+              )}
+              <span
+                className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
+                  runActive ? "animate-pulse" : ""
+                }`}
+                style={{ backgroundColor: runMeta.color }}
+              />
+            </span>
+          )}
         </span>
         {task.priority !== "none" && (
           <span

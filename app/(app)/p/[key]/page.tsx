@@ -12,7 +12,16 @@ export default async function ProjectBoardPage({
   const project = await prisma.project.findUnique({
     where: { key: key.toUpperCase() },
     include: {
-      tasks: { orderBy: { order: "asc" } },
+      tasks: {
+        orderBy: { order: "asc" },
+        include: {
+          workflowRuns: {
+            orderBy: { startedAt: "desc" },
+            take: 1,
+            include: { workflow: { select: { name: true } } },
+          },
+        },
+      },
     },
   });
 
