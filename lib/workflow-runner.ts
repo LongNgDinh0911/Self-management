@@ -238,11 +238,26 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     await prisma.workflowRun.update({ where: { id: runId }, data: { branchName } });
   }
 
+  // The step list is a tree (any step may have several children — e.g.
+  // multiple Condition steps gating different sub-paths off the same
+  // parent), not a flat sequence. Group by parentStepId once up front so
+  // walking it is just "children of X, in sibling order".
   const allSteps = workflow.steps as WorkflowStep[];
-  const resumeFromIndex = run_.currentStepId
-    ? allSteps.findIndex((s) => s.id === run_.currentStepId) + 1
-    : 0;
-  const stepsToRun = allSteps.slice(resumeFromIndex);
+  const childrenByParent = new Map<string | null, WorkflowStep[]>();
+  for (const step of allSteps) {
+    const key = step.parentStepId;
+    const siblings = childrenByParent.get(key) ?? [];
+    siblings.push(step);
+    childrenByParent.set(key, siblings);
+  }
+
+  // stepStatuses: "completed" (ran normally, or a condition whose gate
+  // stayed open — either way its children still run) vs "pruned" (a
+  // condition's gate closed, so its whole subtree is skipped). On resume,
+  // a step already marked here has its own action skipped, but "completed"
+  // ones still recurse into children in case not all of them finished.
+  const stepStatuses: Record<string, "completed" | "pruned"> = JSON.parse(run_.stepStatuses || "{}");
+  const alreadyDoneCount = Object.keys(stepStatuses).length;
 
   await appendLog(
     ctx,
@@ -250,8 +265,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
       isResuming ? " (resume sau crash)" : isChaining ? " (nối tiếp từ workflow trước)" : ""
     }.`
   );
-  if (resumeFromIndex > 0) {
-    await appendLog(ctx, `Bỏ qua ${resumeFromIndex} step đã hoàn tất trước đó.`);
+  if (alreadyDoneCount > 0) {
+    await appendLog(ctx, `Bỏ qua ${alreadyDoneCount} step đã hoàn tất trước đó.`);
   }
 
   const worktreePath = mkdtempSync(path.join(tmpdir(), "self-mgmt-wt-"));
@@ -262,11 +277,11 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const { signal } = controller;
 
   // Commits (and pushes) any pending changes in the worktree as a checkpoint
-  // after a step finishes, and records that step as done. A crash after
-  // this point resumes from the NEXT step instead of redoing this one, and
-  // the work already done is safe on the branch even if the temp worktree
-  // directory itself is later lost.
-  async function checkpoint(step: WorkflowStep) {
+  // after a step finishes, and records its status. A crash after this point
+  // resumes without redoing this step (or, for a pruned branch, without
+  // ever revisiting its subtree), and the work already done is safe on the
+  // branch even if the temp worktree directory itself is later lost.
+  async function checkpoint(step: WorkflowStep, status: "completed" | "pruned" = "completed") {
     const { stdout: statusOut } = await run(
       "git",
       ["status", "--porcelain"],
@@ -285,7 +300,8 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
       );
       await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS, signal);
     }
-    await prisma.workflowRun.update({ where: { id: runId }, data: { currentStepId: step.id } });
+    stepStatuses[step.id] = status;
+    await prisma.workflowRun.update({ where: { id: runId }, data: { stepStatuses: JSON.stringify(stepStatuses) } });
   }
 
   try {
@@ -397,170 +413,176 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
 
       let prUrl: string | null = run_.prUrl ?? null;
 
-      for (const step of stepsToRun) {
+      // Walks the step tree depth-first: run this step (unless a prior pass
+      // already did — resume just needs to keep descending to find what's
+      // still incomplete), then its children in sibling order. A Condition
+      // step whose gate closes marks itself "pruned" and returns before
+      // reaching the recursion below, cutting only its own subtree —
+      // sibling branches off the same parent are unaffected.
+      async function runStep(step: WorkflowStep): Promise<void> {
         if (signal.aborted) throw new WorkflowCancelledError();
-        if (!step.enabled) continue;
+        if (!step.enabled) return; // disabling a step skips its whole subtree
 
-        if (step.type === "condition") {
-          const config = JSON.parse(step.config) as ConditionStepConfig;
-          await appendLog(ctx, `\n▶ Condition "${step.name}": ${config.command}`);
-          try {
+        const existingStatus = stepStatuses[step.id];
+        if (existingStatus === "pruned") return;
+        if (existingStatus !== "completed") {
+          if (step.type === "condition") {
+            const config = JSON.parse(step.config) as ConditionStepConfig;
+            await appendLog(ctx, `\n▶ Condition "${step.name}": ${config.command}`);
+            try {
+              const { stdout } = await run(
+                "bash",
+                ["-lc", config.command],
+                worktreePath,
+                COMMAND_TIMEOUT_MS,
+                signal
+              );
+              await appendLog(ctx, stdout.trim() || "(không có output)");
+            } catch (err) {
+              if (err instanceof WorkflowCancelledError) throw err;
+              const message = err instanceof Error ? err.message : String(err);
+              await appendLog(ctx, message);
+              if (!config.continueOnFailure) {
+                await appendLog(ctx, `Condition "${step.name}" thất bại — bỏ qua nhánh này.`);
+                await checkpoint(step, "pruned");
+                return;
+              }
+              await appendLog(ctx, `Condition thất bại nhưng cấu hình cho phép tiếp tục.`);
+            }
+            await checkpoint(step);
+          } else if (step.type === "ai_step") {
+            const config = JSON.parse(step.config) as AiStepConfig;
+            const prompt = renderTemplate(config.prompt, templateVars);
+            await appendLog(ctx, `\n▶ AI step "${step.name}"`);
             const { stdout } = await run(
-              "bash",
-              ["-lc", config.command],
+              "claude",
+              ["-p", prompt, "--dangerously-skip-permissions"],
               worktreePath,
-              COMMAND_TIMEOUT_MS,
+              AI_STEP_TIMEOUT_MS,
               signal
             );
             await appendLog(ctx, stdout.trim() || "(không có output)");
-          } catch (err) {
-            if (err instanceof WorkflowCancelledError) throw err;
-            const message = err instanceof Error ? err.message : String(err);
-            await appendLog(ctx, message);
-            if (!config.continueOnFailure) {
-              return fail(`Condition "${step.name}" thất bại, dừng workflow.`);
-            }
-            await appendLog(ctx, `Condition thất bại nhưng cấu hình cho phép tiếp tục.`);
-          }
-          await checkpoint(step);
-          continue;
-        }
-
-        if (step.type === "ai_step") {
-          const config = JSON.parse(step.config) as AiStepConfig;
-          const prompt = renderTemplate(config.prompt, templateVars);
-          await appendLog(ctx, `\n▶ AI step "${step.name}"`);
-          const { stdout } = await run(
-            "claude",
-            ["-p", prompt, "--dangerously-skip-permissions"],
-            worktreePath,
-            AI_STEP_TIMEOUT_MS,
-            signal
-          );
-          await appendLog(ctx, stdout.trim() || "(không có output)");
-          await checkpoint(step);
-          continue;
-        }
-
-        if (step.type === "planning") {
-          await appendLog(ctx, `\n▶ Planning "${step.name}"`);
-          if (!task) {
-            await appendLog(ctx, "Run này không gắn với task nào — bỏ qua, không có nơi để lưu planning.");
             await checkpoint(step);
-            continue;
-          }
-          if (templateVars.planning.trim()) {
-            await appendLog(ctx, "Task đã có planning từ trước — bỏ qua, không tạo lại.");
-            await checkpoint(step);
-            continue;
-          }
-
-          const prompt = [
-            "Phân tích task sau và viết 1 bản kế hoạch triển khai (implementation plan) rõ ràng,",
-            "chi tiết, dạng markdown — dùng heading, danh sách các bước cần làm, và nêu rủi ro/lưu ý",
-            "nếu có.",
-            "",
-            `Task: ${templateVars.title}`,
-            "",
-            templateVars.description || "(không có mô tả)",
-            "",
-            "CHỈ trả lời bằng nội dung plan dạng markdown. Không sửa file, không chạy lệnh nào khác.",
-          ].join("\n");
-
-          const { stdout } = await run(
-            "claude",
-            ["-p", prompt, "--dangerously-skip-permissions"],
-            worktreePath,
-            AI_STEP_TIMEOUT_MS,
-            signal
-          );
-          const planning = stdout.trim();
-          await prisma.task.update({ where: { id: task.id }, data: { planning } });
-          templateVars.planning = planning;
-          await appendLog(
-            ctx,
-            "✓ Đã lưu planning vào tab Planning của ticket. Các step sau có thể dùng {{task.planning}} trong prompt."
-          );
-          await checkpoint(step);
-          continue;
-        }
-
-        if (step.type === "action") {
-          const config = JSON.parse(step.config) as ActionStepConfig;
-          if (config.actionType === "create_pr") {
-            await appendLog(ctx, `\n▶ Action "${step.name}": create_pr`);
-            // Commit anything left over first — normally every prior step
-            // already checkpointed its own changes, this just covers the
-            // edge case of a step that touched files without one.
-            await checkpoint(step);
-
-            const { stdout: aheadOut } = await run(
-              "git",
-              ["rev-list", "--count", `origin/${project.defaultBranch}..HEAD`],
-              worktreePath,
-              COMMAND_TIMEOUT_MS,
-              signal
-            );
-            if (parseInt(aheadOut.trim(), 10) === 0) {
-              await appendLog(ctx, "Không có commit nào mới so với base — bỏ qua tạo PR.");
-              continue;
-            }
-
-            // Chaining onto a parent run's branch: a PR may already be open
-            // for it. Reuse it instead of letting `gh pr create` fail.
-            let existingPrUrl: string | null = null;
-            try {
-              const { stdout: viewOut } = await run(
-                "gh",
-                ["pr", "view", branchName, "--json", "url"],
-                worktreePath,
-                COMMAND_TIMEOUT_MS,
-                signal
-              );
-              existingPrUrl = (JSON.parse(viewOut) as { url: string }).url;
-            } catch (err) {
-              if (err instanceof WorkflowCancelledError) throw err;
-              existingPrUrl = null;
-            }
-
-            if (existingPrUrl) {
-              prUrl = existingPrUrl;
-              await appendLog(ctx, `PR đã tồn tại cho branch này, dùng lại: ${existingPrUrl}`);
+          } else if (step.type === "planning") {
+            await appendLog(ctx, `\n▶ Planning "${step.name}"`);
+            if (!task) {
+              await appendLog(ctx, "Run này không gắn với task nào — bỏ qua, không có nơi để lưu planning.");
+              await checkpoint(step);
+            } else if (templateVars.planning.trim()) {
+              await appendLog(ctx, "Task đã có planning từ trước — bỏ qua, không tạo lại.");
+              await checkpoint(step);
             } else {
-              const title = config.prTitle
-                ? renderTemplate(config.prTitle, templateVars)
-                : templateVars.title || workflow.name;
+              const prompt = [
+                "Phân tích task sau và viết 1 bản kế hoạch triển khai (implementation plan) rõ ràng,",
+                "chi tiết, dạng markdown — dùng heading, danh sách các bước cần làm, và nêu rủi ro/lưu ý",
+                "nếu có.",
+                "",
+                `Task: ${templateVars.title}`,
+                "",
+                templateVars.description || "(không có mô tả)",
+                "",
+                "CHỈ trả lời bằng nội dung plan dạng markdown. Không sửa file, không chạy lệnh nào khác.",
+              ].join("\n");
 
               const { stdout } = await run(
-                "gh",
-                [
-                  "pr",
-                  "create",
-                  "--base",
-                  project.defaultBranch,
-                  "--head",
-                  branchName,
-                  "--title",
-                  title,
-                  "--body",
-                  `Tự động tạo bởi workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`,
-                ],
+                "claude",
+                ["-p", prompt, "--dangerously-skip-permissions"],
+                worktreePath,
+                AI_STEP_TIMEOUT_MS,
+                signal
+              );
+              const planning = stdout.trim();
+              await prisma.task.update({ where: { id: task.id }, data: { planning } });
+              templateVars.planning = planning;
+              await appendLog(
+                ctx,
+                "✓ Đã lưu planning vào tab Planning của ticket. Các step sau có thể dùng {{task.planning}} trong prompt."
+              );
+              await checkpoint(step);
+            }
+          } else if (step.type === "action") {
+            const config = JSON.parse(step.config) as ActionStepConfig;
+            if (config.actionType === "create_pr") {
+              await appendLog(ctx, `\n▶ Action "${step.name}": create_pr`);
+              // Commit anything left over first — normally every prior step
+              // already checkpointed its own changes, this just covers the
+              // edge case of a step that touched files without one.
+              await checkpoint(step);
+
+              const { stdout: aheadOut } = await run(
+                "git",
+                ["rev-list", "--count", `origin/${project.defaultBranch}..HEAD`],
                 worktreePath,
                 COMMAND_TIMEOUT_MS,
                 signal
               );
-              const urlMatch = stdout.match(/https:\/\/github\.com\/\S+/);
-              prUrl = urlMatch ? urlMatch[0] : null;
-              await appendLog(ctx, stdout.trim());
+              if (parseInt(aheadOut.trim(), 10) === 0) {
+                await appendLog(ctx, "Không có commit nào mới so với base — bỏ qua tạo PR.");
+              } else {
+                // Chaining onto a parent run's branch: a PR may already be
+                // open for it. Reuse it instead of letting `gh pr create` fail.
+                let existingPrUrl: string | null = null;
+                try {
+                  const { stdout: viewOut } = await run(
+                    "gh",
+                    ["pr", "view", branchName, "--json", "url"],
+                    worktreePath,
+                    COMMAND_TIMEOUT_MS,
+                    signal
+                  );
+                  existingPrUrl = (JSON.parse(viewOut) as { url: string }).url;
+                } catch (err) {
+                  if (err instanceof WorkflowCancelledError) throw err;
+                  existingPrUrl = null;
+                }
+
+                if (existingPrUrl) {
+                  prUrl = existingPrUrl;
+                  await appendLog(ctx, `PR đã tồn tại cho branch này, dùng lại: ${existingPrUrl}`);
+                } else {
+                  const title = config.prTitle
+                    ? renderTemplate(config.prTitle, templateVars)
+                    : templateVars.title || workflow.name;
+
+                  const { stdout } = await run(
+                    "gh",
+                    [
+                      "pr",
+                      "create",
+                      "--base",
+                      project.defaultBranch,
+                      "--head",
+                      branchName,
+                      "--title",
+                      title,
+                      "--body",
+                      `Tự động tạo bởi workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""}.`,
+                    ],
+                    worktreePath,
+                    COMMAND_TIMEOUT_MS,
+                    signal
+                  );
+                  const urlMatch = stdout.match(/https:\/\/github\.com\/\S+/);
+                  prUrl = urlMatch ? urlMatch[0] : null;
+                  await appendLog(ctx, stdout.trim());
+                }
+                await prisma.workflowRun.update({ where: { id: runId }, data: { prUrl } });
+                if (task) {
+                  await prisma.task.update({ where: { id: task.id }, data: { prUrl } });
+                }
+              }
             }
-            await prisma.workflowRun.update({ where: { id: runId }, data: { prUrl } });
-            if (task) {
-              await prisma.task.update({ where: { id: task.id }, data: { prUrl } });
-            }
+            await checkpoint(step);
           }
-          await checkpoint(step);
-          continue;
         }
+
+        for (const child of childrenByParent.get(step.id) ?? []) {
+          await runStep(child);
+        }
+      }
+
+      for (const root of childrenByParent.get(null) ?? []) {
+        await runStep(root);
       }
 
       await appendLog(ctx, `\n✓ Workflow hoàn tất.`);

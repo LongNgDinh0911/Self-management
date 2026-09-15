@@ -1,28 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
-  DndContext,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  closestCenter,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  useSortable,
-  horizontalListSortingStrategy,
-  arrayMove,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  Handle,
+  Position,
+  MarkerType,
+  type Node,
+  type Edge,
+  type Connection,
+  type NodeProps,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import dagre from "@dagrejs/dagre";
 import {
   BoltIcon,
   PlayIcon,
   StopIcon,
   XMarkIcon,
   ArrowTopRightOnSquareIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
 import { STEP_TYPE_META, RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
@@ -36,13 +37,138 @@ import { StepConfigPanel } from "@/components/workflow-step-panel";
 
 type WorkflowWithSteps = Workflow & { steps: WorkflowStep[] };
 
-const ADDABLE_TYPES: WorkflowStepType[] = [
-  "ai_step",
-  "condition",
-  "action",
-  "planning",
-];
+const ADDABLE_TYPES: WorkflowStepType[] = ["ai_step", "condition", "action", "planning"];
 const ACTIVE_STATUSES = new Set(["pending", "running"]);
+
+// Synthetic node id for the trigger, which isn't a real WorkflowStep row —
+// steps with parentStepId === null render as its children.
+const TRIGGER_ID = "__trigger__";
+const NODE_WIDTH = 224;
+const NODE_HEIGHT = 88;
+
+/**
+ * Node positions are always derived from the parentStepId tree via dagre,
+ * never stored — there's no manual layout to persist, so branching a step
+ * (or re-parenting one by dragging a new connection) just works without a
+ * separate "save positions" step.
+ */
+function layoutTree(nodes: Node[], edges: Edge[]): Node[] {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: "LR", nodesep: 28, ranksep: 72 });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  for (const e of edges) g.setEdge(e.source, e.target);
+  dagre.layout(g);
+  return nodes.map((n) => {
+    const pos = g.node(n.id);
+    return { ...n, position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 } };
+  });
+}
+
+function AddChildButton({ onAdd }: { onAdd: (type: WorkflowStepType) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title="Thêm step con"
+        className="flex h-5 w-5 items-center justify-center rounded-full border border-neutral-700 bg-neutral-800 text-neutral-400 hover:border-indigo-500 hover:text-indigo-400"
+      >
+        <PlusIcon className="h-3 w-3" />
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute left-1/2 top-6 z-10 flex -translate-x-1/2 flex-col gap-0.5 rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-lg"
+        >
+          {ADDABLE_TYPES.map((type) => {
+            const meta = STEP_TYPE_META[type];
+            return (
+              <button
+                key={type}
+                onClick={() => {
+                  onAdd(type);
+                  setOpen(false);
+                }}
+                className="flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-left text-xs text-neutral-300 hover:bg-neutral-800"
+              >
+                <meta.icon className="h-3.5 w-3.5" style={{ color: meta.color }} />
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type TriggerNodeData = {
+  triggerType: string;
+  onAddChild: (type: WorkflowStepType) => void;
+};
+
+function TriggerNode({ data, selected }: NodeProps<Node<TriggerNodeData>>) {
+  return (
+    <div
+      className={`w-56 rounded-lg border bg-neutral-900 p-3 text-left ${
+        selected ? "border-indigo-500" : "border-neutral-800"
+      }`}
+    >
+      <div className="mb-2 flex items-center gap-1.5">
+        <BoltIcon className="h-3.5 w-3.5 shrink-0 text-teal-400" />
+        <span className="truncate text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+          Trigger
+        </span>
+        <div className="ml-auto">
+          <AddChildButton onAdd={data.onAddChild} />
+        </div>
+      </div>
+      <p className="text-sm font-medium text-neutral-100">
+        {data.triggerType === "manual" ? "Manual run" : data.triggerType}
+      </p>
+      <p className="mt-1 text-xs text-neutral-500">Bấm nút Run để chạy workflow.</p>
+      <Handle type="source" position={Position.Right} className="!bg-neutral-600" />
+    </div>
+  );
+}
+
+type StepNodeData = {
+  step: WorkflowStep;
+  onAddChild: (type: WorkflowStepType) => void;
+};
+
+function StepNode({ data, selected }: NodeProps<Node<StepNodeData>>) {
+  const { step } = data;
+  const meta = STEP_TYPE_META[step.type];
+  return (
+    <div
+      className={`w-56 rounded-lg border bg-neutral-900 p-3 text-left ${
+        selected ? "border-indigo-500" : "border-neutral-800 hover:border-neutral-700"
+      } ${!step.enabled ? "opacity-50" : ""}`}
+    >
+      <Handle type="target" position={Position.Left} className="!bg-neutral-600" />
+      <div className="mb-2 flex items-center gap-1.5">
+        <meta.icon className="h-3.5 w-3.5 shrink-0" style={{ color: meta.color }} />
+        <span className="truncate text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+          {meta.label}
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          {!step.enabled && <span className="text-[10px] text-neutral-600">tắt</span>}
+          <AddChildButton onAdd={data.onAddChild} />
+        </div>
+      </div>
+      <p className="text-sm font-medium text-neutral-100">{step.name}</p>
+      <p className="mt-1 line-clamp-2 text-xs text-neutral-500">{meta.description}</p>
+      <Handle type="source" position={Position.Right} className="!bg-neutral-600" />
+    </div>
+  );
+}
+
+const nodeTypes = { trigger: TriggerNode, step: StepNode };
 
 export function WorkflowBuilder({
   initialWorkflow,
@@ -64,10 +190,7 @@ export function WorkflowBuilder({
   const [stopping, setStopping] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-  );
+  const [treeError, setTreeError] = useState<string | null>(null);
 
   const activeTestRunIds =
     testRun && ACTIVE_STATUSES.has(testRun.status) ? [testRun.id] : [];
@@ -79,9 +202,7 @@ export function WorkflowBuilder({
   async function handleRun() {
     setTriggering(true);
     setRunError(null);
-    const res = await fetch(`/api/workflows/${initialWorkflow.id}/run`, {
-      method: "POST",
-    });
+    const res = await fetch(`/api/workflows/${initialWorkflow.id}/run`, { method: "POST" });
     setTriggering(false);
     if (res.ok) {
       setShowLog(true);
@@ -95,9 +216,7 @@ export function WorkflowBuilder({
   async function handleStop() {
     if (!testRun) return;
     setStopping(true);
-    const res = await fetch(`/api/workflow-runs/${testRun.id}/stop`, {
-      method: "POST",
-    });
+    const res = await fetch(`/api/workflow-runs/${testRun.id}/stop`, { method: "POST" });
     setStopping(false);
     if (res.ok) setTestRun(await res.json());
   }
@@ -116,9 +235,7 @@ export function WorkflowBuilder({
   async function handleDeleteWorkflow() {
     if (!confirm("Xóa workflow này? Hành động này không thể hoàn tác.")) return;
     setDeleting(true);
-    const res = await fetch(`/api/workflows/${initialWorkflow.id}`, {
-      method: "DELETE",
-    });
+    const res = await fetch(`/api/workflows/${initialWorkflow.id}`, { method: "DELETE" });
     setDeleting(false);
     if (res.ok) {
       router.push(`/p/${projectKey}/workflows`);
@@ -126,50 +243,100 @@ export function WorkflowBuilder({
     }
   }
 
-  async function handleAddStep(type: WorkflowStepType) {
-    const res = await fetch(`/api/workflows/${initialWorkflow.id}/steps`, {
-      method: "POST",
+  const handleAddStep = useCallback(
+    async (type: WorkflowStepType, parentStepId: string | null) => {
+      const res = await fetch(`/api/workflows/${initialWorkflow.id}/steps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, parentStepId }),
+      });
+      if (res.ok) {
+        const step = await res.json();
+        setSteps((prev) => [...prev, step]);
+        setSelected(step.id);
+      }
+    },
+    [initialWorkflow.id]
+  );
+
+  const handleConnect = useCallback(async (connection: Connection) => {
+    if (!connection.source || !connection.target) return;
+    setTreeError(null);
+    const parentStepId = connection.source === TRIGGER_ID ? null : connection.source;
+    const res = await fetch(`/api/workflow-steps/${connection.target}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type }),
+      body: JSON.stringify({ parentStepId }),
     });
     if (res.ok) {
-      const step = await res.json();
-      setSteps((prev) => [...prev, step]);
-      setSelected(step.id);
+      const updated = await res.json();
+      setSteps((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    } else {
+      const body = await res.json().catch(() => null);
+      setTreeError(body?.error ?? "Không nối được step");
     }
-  }
-
-  async function handleDragEnd(event: DragEndEvent) {
-    const { active: activeItem, over } = event;
-    if (!over || activeItem.id === over.id) return;
-
-    const oldIndex = steps.findIndex((s) => s.id === activeItem.id);
-    const newIndex = steps.findIndex((s) => s.id === over.id);
-    if (oldIndex === -1 || newIndex === -1) return;
-
-    const reordered = arrayMove(steps, oldIndex, newIndex);
-    setSteps(reordered);
-
-    await fetch("/api/workflow-steps/reorder", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stepIds: reordered.map((s) => s.id) }),
-    });
-  }
+  }, []);
 
   function handleStepUpdated(updated: WorkflowStep) {
     setSteps((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
   }
 
   function handleStepDeleted(id: string) {
-    setSteps((prev) => prev.filter((s) => s.id !== id));
+    // The API cascades the delete to the whole subtree — drop it locally too.
+    setSteps((prev) => {
+      const toRemove = new Set([id]);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const s of prev) {
+          if (s.parentStepId && toRemove.has(s.parentStepId) && !toRemove.has(s.id)) {
+            toRemove.add(s.id);
+            grew = true;
+          }
+        }
+      }
+      return prev.filter((s) => !toRemove.has(s.id));
+    });
     setSelected(null);
   }
 
   const selectedStep =
-    selected && selected !== "trigger"
-      ? steps.find((s) => s.id === selected)
-      : null;
+    selected && selected !== "trigger" ? steps.find((s) => s.id === selected) : null;
+
+  const { nodes, edges } = useMemo(() => {
+    const rawNodes: Node[] = [
+      {
+        id: TRIGGER_ID,
+        type: "trigger",
+        position: { x: 0, y: 0 },
+        selected: selected === "trigger",
+        data: {
+          triggerType: initialWorkflow.triggerType,
+          onAddChild: (type: WorkflowStepType) => handleAddStep(type, null),
+        } satisfies TriggerNodeData,
+      },
+      ...steps.map(
+        (step): Node => ({
+          id: step.id,
+          type: "step",
+          position: { x: 0, y: 0 },
+          selected: selected === step.id,
+          data: {
+            step,
+            onAddChild: (type: WorkflowStepType) => handleAddStep(type, step.id),
+          } satisfies StepNodeData,
+        })
+      ),
+    ];
+    const rawEdges: Edge[] = steps.map((step) => ({
+      id: `${step.parentStepId ?? TRIGGER_ID}->${step.id}`,
+      source: step.parentStepId ?? TRIGGER_ID,
+      target: step.id,
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#525252", width: 16, height: 16 },
+      style: { stroke: "#525252" },
+    }));
+    return { nodes: layoutTree(rawNodes, rawEdges), edges: rawEdges };
+  }, [steps, selected, initialWorkflow.triggerType, handleAddStep]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -185,9 +352,7 @@ export function WorkflowBuilder({
             <button
               onClick={() => setActive((v) => !v)}
               className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] ${
-                active
-                  ? "bg-emerald-500/10 text-emerald-400"
-                  : "bg-neutral-800 text-neutral-500"
+                active ? "bg-emerald-500/10 text-emerald-400" : "bg-neutral-800 text-neutral-500"
               }`}
             >
               <span
@@ -198,9 +363,7 @@ export function WorkflowBuilder({
           </div>
 
           <div className="flex items-center gap-2">
-            {savedAt && (
-              <span className="text-xs text-neutral-500">Đã lưu</span>
-            )}
+            {savedAt && <span className="text-xs text-neutral-500">Đã lưu</span>}
             <button
               onClick={handleSaveHeader}
               disabled={saving}
@@ -256,28 +419,11 @@ export function WorkflowBuilder({
             {runError}
           </p>
         )}
-
-        <div className="flex items-center gap-2 border-b border-neutral-800 px-5 py-2">
-          {ADDABLE_TYPES.map((type) => {
-            const meta = STEP_TYPE_META[type];
-
-            return (
-              <button
-                key={type}
-                onClick={() => handleAddStep(type)}
-                className="flex items-center gap-1.5 rounded-md border border-neutral-700 px-2.5 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-              >
-                {meta.icon && (
-                  <meta.icon
-                    className="h-3.5 w-3.5"
-                    style={{ color: meta.color }}
-                  />
-                )}
-                + {meta.label}
-              </button>
-            );
-          })}
-        </div>
+        {treeError && (
+          <p className="border-b border-neutral-800 bg-red-500/10 px-5 py-2 text-xs text-red-400">
+            {treeError}
+          </p>
+        )}
 
         {testRun && showLog && (
           <div className="border-b border-neutral-800 px-5 py-3">
@@ -285,13 +431,9 @@ export function WorkflowBuilder({
               <div className="flex items-center gap-2">
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${testRun.status === "running" ? "animate-pulse" : ""}`}
-                  style={{
-                    backgroundColor: RUN_STATUS_META[testRun.status].color,
-                  }}
+                  style={{ backgroundColor: RUN_STATUS_META[testRun.status].color }}
                 />
-                <span className="text-xs font-medium text-neutral-300">
-                  Test run
-                </span>
+                <span className="text-xs font-medium text-neutral-300">Test run</span>
                 <span
                   className="rounded-full px-1.5 py-0.5 text-[11px]"
                   style={{
@@ -326,35 +468,32 @@ export function WorkflowBuilder({
           </div>
         )}
 
-        <div className="flex-1 overflow-x-auto p-8">
-          <div className="flex items-center gap-0">
-            <TriggerCard
-              triggerType={initialWorkflow.triggerType}
-              selected={selected === "trigger"}
-              onClick={() => setSelected("trigger")}
+        <div className="flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodeClick={(_, node) => setSelected(node.id === TRIGGER_ID ? "trigger" : node.id)}
+            onPaneClick={() => setSelected(null)}
+            onConnect={handleConnect}
+            nodesDraggable={false}
+            fitView
+            proOptions={{ hideAttribution: true }}
+            colorMode="dark"
+          >
+            <Background color="#262626" gap={20} />
+            <Controls
+              showInteractive={false}
+              className="[&>button]:!border-neutral-800 [&>button]:!bg-neutral-900 [&>button]:!fill-neutral-400 [&>button]:hover:!bg-neutral-800"
             />
-
-            <DndContext
-              id={`workflow-${initialWorkflow.id}`}
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
-            >
-              <SortableContext
-                items={steps.map((s) => s.id)}
-                strategy={horizontalListSortingStrategy}
-              >
-                {steps.map((step) => (
-                  <StepCardSortable
-                    key={step.id}
-                    step={step}
-                    selected={selected === step.id}
-                    onClick={() => setSelected(step.id)}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
-          </div>
+            <MiniMap
+              pannable
+              zoomable
+              className="!bg-neutral-900"
+              maskColor="rgba(0,0,0,0.65)"
+              nodeColor="#404040"
+            />
+          </ReactFlow>
         </div>
       </div>
 
@@ -379,47 +518,6 @@ export function WorkflowBuilder({
   );
 }
 
-function Arrow() {
-  return <div className="h-px w-8 shrink-0 bg-neutral-700" />;
-}
-
-function TriggerCard({
-  triggerType,
-  selected,
-  onClick,
-}: {
-  triggerType: string;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <>
-      <button
-        onClick={onClick}
-        className={`w-56 shrink-0 rounded-lg border bg-neutral-900 p-3 text-left ${
-          selected
-            ? "border-indigo-500"
-            : "border-neutral-800 hover:border-neutral-700"
-        }`}
-      >
-        <div className="mb-2 flex items-center gap-1.5">
-          <BoltIcon className="h-3.5 w-3.5 text-teal-400" />
-          <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            Trigger
-          </span>
-        </div>
-        <p className="text-sm font-medium text-neutral-100">
-          {triggerType === "manual" ? "Manual run" : triggerType}
-        </p>
-        <p className="mt-1 text-xs text-neutral-500">
-          Bấm nút Run để chạy workflow.
-        </p>
-      </button>
-      <Arrow />
-    </>
-  );
-}
-
 function TriggerPanel({
   triggerType,
   onClose,
@@ -433,17 +531,12 @@ function TriggerPanel({
         <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-100">
           <BoltIcon className="h-4 w-4 text-teal-400" /> Trigger
         </h3>
-        <button
-          onClick={onClose}
-          className="text-neutral-500 hover:text-neutral-200"
-        >
+        <button onClick={onClose} className="text-neutral-500 hover:text-neutral-200">
           <XMarkIcon className="h-4 w-4" />
         </button>
       </div>
 
-      <label className="mb-1 block text-xs text-neutral-400">
-        Loại trigger
-      </label>
+      <label className="mb-1 block text-xs text-neutral-400">Loại trigger</label>
       <select
         value={triggerType}
         disabled
@@ -452,77 +545,8 @@ function TriggerPanel({
         <option value="manual">Manual run</option>
       </select>
       <p className="text-xs text-neutral-500">
-        Event / cron / webhook trigger sẽ có khi app deploy lên hosting luôn bật
-        (xem backlog).
+        Event / cron / webhook trigger sẽ có khi app deploy lên hosting luôn bật (xem backlog).
       </p>
     </div>
-  );
-}
-
-function StepCardSortable({
-  step,
-  selected,
-  onClick,
-}: {
-  step: WorkflowStep;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: step.id,
-  });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
-  };
-  const meta = STEP_TYPE_META[step.type];
-
-  return (
-    <>
-      <div
-        ref={setNodeRef}
-        style={style}
-        {...attributes}
-        {...listeners}
-        className="shrink-0"
-      >
-        <button
-          onClick={onClick}
-          className={`w-56 rounded-lg border bg-neutral-900 p-3 text-left ${
-            selected
-              ? "border-indigo-500"
-              : "border-neutral-800 hover:border-neutral-700"
-          } ${!step.enabled ? "opacity-50" : ""}`}
-        >
-          <div className="mb-2 flex items-center gap-1.5">
-            {meta.icon && (
-              <meta.icon
-                className="h-3.5 w-3.5"
-                style={{ color: meta.color }}
-              />
-            )}
-            <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-              {meta.label}
-            </span>
-            {!step.enabled && (
-              <span className="ml-auto text-[10px] text-neutral-600">tắt</span>
-            )}
-          </div>
-          <p className="text-sm font-medium text-neutral-100">{step.name}</p>
-          <p className="mt-1 line-clamp-2 text-xs text-neutral-500">
-            {meta.description}
-          </p>
-        </button>
-      </div>
-      <Arrow />
-    </>
   );
 }

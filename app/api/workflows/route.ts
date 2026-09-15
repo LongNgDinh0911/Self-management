@@ -39,17 +39,29 @@ export async function POST(request: NextRequest) {
               prompt: "{{task.title}}\n\n{{task.description}}",
             }),
           },
-          {
-            order: 1,
-            type: "action",
-            name: "Create pull request",
-            config: JSON.stringify({ actionType: "create_pr" }),
-          },
         ],
       },
     },
+    include: { steps: true },
+  });
+
+  // The second default step is a child of the first — nested creates can't
+  // reference a sibling's generated id, so it's created as a follow-up.
+  await prisma.workflowStep.create({
+    data: {
+      workflowId: workflow.id,
+      parentStepId: workflow.steps[0].id,
+      order: 0,
+      type: "action",
+      name: "Create pull request",
+      config: JSON.stringify({ actionType: "create_pr" }),
+    },
+  });
+
+  const full = await prisma.workflow.findUniqueOrThrow({
+    where: { id: workflow.id },
     include: { steps: { orderBy: { order: "asc" } } },
   });
 
-  return NextResponse.json(workflow, { status: 201 });
+  return NextResponse.json(full, { status: 201 });
 }

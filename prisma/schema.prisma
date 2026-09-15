@@ -154,7 +154,7 @@ model Workflow {
 
 model WorkflowStep {
   id      String           @id @default(cuid())
-  order   Int
+  order   Int              // sibling order — position among steps sharing the same parent
   type    WorkflowStepType
   name    String
   enabled Boolean          @default(true)
@@ -163,7 +163,15 @@ model WorkflowStep {
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String
 
+  // Branching: any step can have multiple children (e.g. several Condition
+  // steps gating different sub-paths off the same parent). null = root step,
+  // runs right after the trigger. Deleting a step cascades to its subtree.
+  parentStep   WorkflowStep?  @relation("StepTree", fields: [parentStepId], references: [id], onDelete: Cascade)
+  parentStepId String?
+  childSteps   WorkflowStep[] @relation("StepTree")
+
   @@index([workflowId, order])
+  @@index([parentStepId])
 }
 
 model WorkflowRun {
@@ -172,7 +180,11 @@ model WorkflowRun {
   branchName    String?
   prUrl         String?
   log           String            @default("")
-  currentStepId String?
+  // JSON object mapping stepId -> "completed" | "pruned", used both to
+  // resume a crashed run (skip whatever already ran) and to remember which
+  // branches were pruned by a failed Condition (its subtree never runs, on
+  // a fresh pass or a resumed one).
+  stepStatuses  String            @default("{}")
   startedAt     DateTime          @default(now())
   finishedAt    DateTime?
 
