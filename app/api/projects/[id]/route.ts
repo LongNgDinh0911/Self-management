@@ -27,6 +27,9 @@ export async function PATCH(
   if (body.jiraProjectKey === null || typeof body.jiraProjectKey === "string") {
     data.jiraProjectKey = body.jiraProjectKey?.trim().toUpperCase() || null;
   }
+  if (body.categoryId === null || typeof body.categoryId === "string") {
+    data.categoryId = body.categoryId || null;
+  }
 
   const project = await prisma.project.update({ where: { id }, data });
   return NextResponse.json(project);

@@ -45,10 +45,25 @@ model Project {
   jiraSite       String?
   jiraProjectKey String?
 
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  categoryId String?
+
   tasks     Task[]
   labels    Label[]
   workflows Workflow[]
   nextTaskNumber Int @default(1)
+
+  @@index([categoryId])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("#6366f1")
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  projects  Project[]
 }
 
 model Task {
