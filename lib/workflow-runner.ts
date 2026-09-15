@@ -554,6 +554,9 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               await appendLog(ctx, stdout.trim());
             }
             await prisma.workflowRun.update({ where: { id: runId }, data: { prUrl } });
+            if (task) {
+              await prisma.task.update({ where: { id: task.id }, data: { prUrl } });
+            }
           }
           await checkpoint(step);
           continue;

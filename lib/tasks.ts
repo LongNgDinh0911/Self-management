@@ -11,6 +11,7 @@ export type CreateTaskInput = {
   dueDate?: string | null;
   jiraKey?: string | null;
   jiraUrl?: string | null;
+  prUrl?: string | null;
 };
 
 export async function createTask(projectId: string, input: CreateTaskInput) {
@@ -25,6 +26,7 @@ export async function createTask(projectId: string, input: CreateTaskInput) {
   const dueDate = input.dueDate ? new Date(input.dueDate) : null;
   const jiraKey = input.jiraKey?.trim() || null;
   const jiraUrl = input.jiraUrl?.trim() || null;
+  const prUrl = input.prUrl?.trim() || null;
 
   return prisma.$transaction(async (tx) => {
     const project = await tx.project.update({
@@ -50,6 +52,7 @@ export async function createTask(projectId: string, input: CreateTaskInput) {
         dueDate,
         jiraKey,
         jiraUrl,
+        prUrl,
         order: (lastInColumn?.order ?? -1) + 1,
       },
     });
