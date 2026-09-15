@@ -32,6 +32,7 @@ export function StepConfigPanel({
   const meta = STEP_TYPE_META[step.type];
   const [name, setName] = useState(step.name);
   const [enabled, setEnabled] = useState(step.enabled);
+  const [pauseAfter, setPauseAfter] = useState(step.pauseAfter);
   const [saving, setSaving] = useState(false);
 
   const [aiConfig, setAiConfig] = useState<AiStepConfig>(() =>
@@ -58,7 +59,7 @@ export function StepConfigPanel({
     const res = await fetch(`/api/workflow-steps/${step.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, enabled, config }),
+      body: JSON.stringify({ name, enabled, pauseAfter, config }),
     });
     setSaving(false);
     if (res.ok) onUpdated(await res.json());
@@ -163,9 +164,18 @@ export function StepConfigPanel({
         </>
       )}
 
-      <label className="mb-4 flex items-center gap-2 text-xs text-neutral-400">
+      <label className="mb-2 flex items-center gap-2 text-xs text-neutral-400">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         Bật step này
+      </label>
+
+      <label className="mb-4 flex items-center gap-2 text-xs text-neutral-400">
+        <input
+          type="checkbox"
+          checked={pauseAfter}
+          onChange={(e) => setPauseAfter(e.target.checked)}
+        />
+        Dừng lại để review &amp; sửa sau khi step này chạy xong
       </label>
 
       <div className="flex items-center justify-between">

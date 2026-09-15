@@ -7,6 +7,7 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   ArrowTopRightOnSquareIcon,
+  CodeBracketIcon,
 } from "@heroicons/react/24/outline";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
@@ -40,13 +41,20 @@ export function TaskWorkflowRuns({
     workflows[0]?.id ?? "",
   );
   const [chaining, setChaining] = useState(false);
+  const [continuingId, setContinuingId] = useState<string | null>(null);
+  const [diffOpenId, setDiffOpenId] = useState<string | null>(null);
+  const [diffText, setDiffText] = useState<Record<string, string>>({});
+  const [diffLoadingId, setDiffLoadingId] = useState<string | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
 
   // Runs still watched for live socket updates: actively executing ones,
   // plus any run whose chain-picker is open (its own state can move to
-  // "running" the instant the new chained run POST fires — a resumed run
-  // reuses the same id, so it needs to already be subscribed too).
+  // "running" the instant the new chained run POST fires — a resumed or
+  // continued run reuses the same id, so it needs to already be subscribed).
   const liveWatchIds = runs
-    .filter((r) => ACTIVE_STATUSES.has(r.status) || r.status === "crashed")
+    .filter(
+      (r) => ACTIVE_STATUSES.has(r.status) || r.status === "crashed" || r.status === "paused"
+    )
     .map((r) => r.id);
 
   useWorkflowRunUpdates<RunWithWorkflow>(liveWatchIds, (updated) => {
@@ -102,6 +110,39 @@ export function TaskWorkflowRuns({
       setError(body?.error ?? "Không resume được run");
     }
     setResumingId(null);
+  }
+
+  async function handleContinue(runId: string) {
+    setContinuingId(runId);
+    setError(null);
+    const res = await fetch(`/api/workflow-runs/${runId}/continue`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setError(body?.error ?? "Không continue được run");
+    }
+    setContinuingId(null);
+  }
+
+  async function handleToggleDiff(runId: string) {
+    if (diffOpenId === runId) {
+      setDiffOpenId(null);
+      return;
+    }
+    setDiffOpenId(runId);
+    setDiffError(null);
+    if (diffText[runId] !== undefined) return;
+    setDiffLoadingId(runId);
+    const res = await fetch(`/api/workflow-runs/${runId}/diff`);
+    setDiffLoadingId(null);
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setDiffError(body?.error ?? "Không lấy được diff");
+      return;
+    }
+    const body = await res.json();
+    setDiffText((prev) => ({ ...prev, [runId]: body.diff }));
   }
 
   async function handleChain(parentRunId: string) {
@@ -274,6 +315,47 @@ export function TaskWorkflowRuns({
                         {resumingId === run.id ? "Đang resume..." : "▷ Resume"}
                       </button>
                     )}
+                    {run.status === "paused" && (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleDiff(run.id);
+                          }}
+                          className="flex items-center gap-1 rounded-md border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+                        >
+                          <CodeBracketIcon className="h-3 w-3" />
+                          Xem diff
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleStop(run.id);
+                          }}
+                          disabled={stoppingId === run.id}
+                          className="flex items-center gap-1 rounded-md border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-400 hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                        >
+                          {stoppingId === run.id ? (
+                            "Đang dừng..."
+                          ) : (
+                            <>
+                              <StopIcon className="h-3 w-3" />
+                              Stop
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleContinue(run.id);
+                          }}
+                          disabled={continuingId === run.id}
+                          className="rounded-md border border-indigo-700 px-2 py-0.5 text-[11px] text-indigo-400 hover:border-indigo-500 hover:text-indigo-300 disabled:opacity-50"
+                        >
+                          {continuingId === run.id ? "Đang tiếp tục..." : "▷ Continue"}
+                        </button>
+                      </>
+                    )}
                     {!ACTIVE_STATUSES.has(run.status) &&
                       run.branchName &&
                       workflows.length > 0 && (
@@ -324,6 +406,32 @@ export function TaskWorkflowRuns({
                     >
                       {chaining ? "Đang trigger..." : "▷ Chạy"}
                     </button>
+                  </div>
+                )}
+
+                {diffOpenId === run.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-2 rounded-md border border-neutral-800 bg-neutral-950 p-2.5"
+                  >
+                    {run.status === "paused" && run.worktreePath && (
+                      <p className="mb-2 text-xs text-neutral-500">
+                        Sửa code trực tiếp tại:{" "}
+                        <code className="rounded bg-neutral-800 px-1 py-0.5 text-neutral-300">
+                          {run.worktreePath}
+                        </code>
+                        , xong bấm Continue.
+                      </p>
+                    )}
+                    {diffLoadingId === run.id ? (
+                      <p className="text-xs text-neutral-500">Đang tải diff...</p>
+                    ) : diffError ? (
+                      <p className="text-xs text-red-400">{diffError}</p>
+                    ) : (
+                      <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono text-xs text-neutral-400">
+                        {diffText[run.id] || "(không có thay đổi)"}
+                      </pre>
+                    )}
                   </div>
                 )}
 

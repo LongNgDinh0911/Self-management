@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rmSync } from "node:fs";
 import { prisma } from "@/lib/prisma";
 import { stopWorkflowRun } from "@/lib/workflow-runner";
 import { emitWorkflowRunUpdate } from "@/lib/socket";
 
-const STOPPABLE_STATUSES = new Set(["pending", "running"]);
+const STOPPABLE_STATUSES = new Set(["pending", "running", "paused"]);
 
 export async function POST(
   _request: NextRequest,
@@ -37,6 +38,12 @@ export async function POST(
     emitWorkflowRunUpdate(updated);
     if (run.taskId) {
       await prisma.task.update({ where: { id: run.taskId }, data: { status: "in_review" } });
+    }
+    // A paused run's worktree was deliberately kept alive on disk for
+    // review — nothing else ever cleans it up if the run ends here instead
+    // of being continued, so do it now.
+    if (run.worktreePath) {
+      rmSync(run.worktreePath, { recursive: true, force: true });
     }
   }
 

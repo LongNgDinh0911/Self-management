@@ -11,6 +11,7 @@ export async function PATCH(
   const data: Record<string, unknown> = {};
   if (typeof body.name === "string") data.name = body.name.trim();
   if (typeof body.enabled === "boolean") data.enabled = body.enabled;
+  if (typeof body.pauseAfter === "boolean") data.pauseAfter = body.pauseAfter;
   if (body.config && typeof body.config === "object") {
     data.config = JSON.stringify(body.config);
   }

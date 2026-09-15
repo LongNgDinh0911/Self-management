@@ -27,6 +27,16 @@ class WorkflowCancelledError extends Error {
   }
 }
 
+// Thrown to unwind out of the recursive step walk when a step configured
+// with pauseAfter finishes — not an error, just a clean "stop here for now"
+// signal caught at the top level, distinct from cancellation/failure.
+class WorkflowPausedError extends Error {
+  constructor() {
+    super("Workflow đang dừng để review.");
+    this.name = "WorkflowPausedError";
+  }
+}
+
 // Tracks the AbortController for every run currently executing in this
 // process, so a stop request can kill the in-flight child process. A run
 // with no entry here is either not running in this process (e.g. server
@@ -187,15 +197,16 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const { workflow, task } = run_;
   const project = workflow.project;
   ctx.workflowName = workflow.name;
+  const wasPaused = run_.status === "paused";
 
   // Atomically claim the run: only proceed if it's still "pending" (fresh
-  // trigger) or "crashed" (a dev-server restart orphaned it mid-execution —
-  // see the boot-time reconciliation in server.ts). If a stop request
-  // already flipped it to "cancelled" in the gap between run creation and
-  // this point, count is 0 and we bail out without ever having registered
-  // anything that needs cleanup.
+  // trigger), "crashed" (a dev-server restart orphaned it mid-execution —
+  // see the boot-time reconciliation in server.ts), or "paused" (a human
+  // asked for this — see /continue). If a stop request already flipped it
+  // to "cancelled" in the gap between run creation and this point, count is
+  // 0 and we bail out without ever having registered anything to clean up.
   const claimed = await prisma.workflowRun.updateMany({
-    where: { id: runId, status: { in: ["pending", "crashed"] } },
+    where: { id: runId, status: { in: ["pending", "crashed", "paused"] } },
     data: { status: "running" },
   });
   if (claimed.count === 0) return;
@@ -262,19 +273,40 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   await appendLog(
     ctx,
     `${isResuming ? "Tiếp tục" : "Bắt đầu"} workflow "${workflow.name}"${task ? ` cho task ${project.key}-${task.number}` : ""} trên branch ${branchName}${
-      isResuming ? " (resume sau crash)" : isChaining ? " (nối tiếp từ workflow trước)" : ""
+      wasPaused
+        ? " (tiếp tục sau khi pause review)"
+        : isResuming
+          ? " (resume sau crash)"
+          : isChaining
+            ? " (nối tiếp từ workflow trước)"
+            : ""
     }.`
   );
   if (alreadyDoneCount > 0) {
     await appendLog(ctx, `Bỏ qua ${alreadyDoneCount} step đã hoàn tất trước đó.`);
   }
 
-  const worktreePath = mkdtempSync(path.join(tmpdir(), "self-mgmt-wt-"));
-  rmSync(worktreePath, { recursive: true, force: true }); // git worktree add needs the path to not exist
+  // Reattach to the SAME worktree directory a paused run left behind, if it
+  // still exists — a fresh one would only have whatever was already
+  // committed, silently discarding any edits made by hand while paused.
+  // Crash-resume can safely fall back to a fresh worktree instead (nothing
+  // uncommitted to lose there, unlike a deliberate pause-for-review).
+  const reusingWorktree =
+    !!run_.worktreePath &&
+    existsSync(run_.worktreePath) &&
+    existsSync(path.join(run_.worktreePath, ".git"));
+  const worktreePath = reusingWorktree
+    ? run_.worktreePath!
+    : mkdtempSync(path.join(tmpdir(), "self-mgmt-wt-"));
+  if (!reusingWorktree) {
+    rmSync(worktreePath, { recursive: true, force: true }); // git worktree add needs the path to not exist
+    await prisma.workflowRun.update({ where: { id: runId }, data: { worktreePath } });
+  }
 
   const controller = new AbortController();
   activeRuns.set(runId, controller);
   const { signal } = controller;
+  let didPause = false;
 
   // Commits (and pushes) any pending changes in the worktree as a checkpoint
   // after a step finishes, and records its status. A crash after this point
@@ -312,84 +344,50 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     // stuck at "running" because one specific step's error handling didn't
     // anticipate it.
     try {
-      // Stale administrative entries for worktrees whose directory no
-      // longer exists (e.g. left behind by a crashed process) block `git
-      // worktree add` from reusing that branch until pruned.
-      await run("git", ["worktree", "prune"], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
+      if (reusingWorktree) {
+        await appendLog(ctx, `Dùng lại worktree đã có tại ${worktreePath} (từ lần pause trước).`);
+      } else {
+        // Stale administrative entries for worktrees whose directory no
+        // longer exists (e.g. left behind by a crashed process) block `git
+        // worktree add` from reusing that branch until pruned.
+        await run("git", ["worktree", "prune"], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
 
-      // A crashed process's worktree directory itself usually still exists
-      // (only the graceful `finally` cleanup removes it), so `prune` alone
-      // won't free up the branch — git refuses to check out a branch that's
-      // already checked out elsewhere. Force-detach any worktree still
-      // attached to this run's branch before reusing (or creating) it.
-      if (!isNewBranch) {
-        const { stdout: listOut } = await run(
-          "git",
-          ["worktree", "list", "--porcelain"],
-          project.repoLocalPath,
-          COMMAND_TIMEOUT_MS,
-          signal
-        );
-        for (const entry of listOut.split("\n\n")) {
-          const pathMatch = entry.match(/^worktree (.+)$/m);
-          const branchMatch = entry.match(/^branch refs\/heads\/(.+)$/m);
-          if (pathMatch && branchMatch?.[1] === branchName) {
-            await run(
-              "git",
-              ["worktree", "remove", pathMatch[1], "--force"],
-              project.repoLocalPath,
-              COMMAND_TIMEOUT_MS,
-              signal
-            ).catch(() => {});
+        // A crashed process's worktree directory itself usually still exists
+        // (only the graceful `finally` cleanup removes it), so `prune` alone
+        // won't free up the branch — git refuses to check out a branch that's
+        // already checked out elsewhere. Force-detach any worktree still
+        // attached to this run's branch before reusing (or creating) it.
+        if (!isNewBranch) {
+          const { stdout: listOut } = await run(
+            "git",
+            ["worktree", "list", "--porcelain"],
+            project.repoLocalPath,
+            COMMAND_TIMEOUT_MS,
+            signal
+          );
+          for (const entry of listOut.split("\n\n")) {
+            const pathMatch = entry.match(/^worktree (.+)$/m);
+            const branchMatch = entry.match(/^branch refs\/heads\/(.+)$/m);
+            if (pathMatch && branchMatch?.[1] === branchName) {
+              await run(
+                "git",
+                ["worktree", "remove", pathMatch[1], "--force"],
+                project.repoLocalPath,
+                COMMAND_TIMEOUT_MS,
+                signal
+              ).catch(() => {});
+            }
           }
         }
-      }
 
-      try {
-        await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
-      } catch (err) {
-        if (err instanceof WorkflowCancelledError) throw err;
-        // best-effort refresh; the fallbacks below cover no-"origin" repos
-      }
-
-      if (isNewBranch) {
         try {
-          await run(
-            "git",
-            ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
-            project.repoLocalPath,
-            COMMAND_TIMEOUT_MS,
-            signal
-          );
+          await run("git", ["fetch", "origin", project.defaultBranch], project.repoLocalPath, COMMAND_TIMEOUT_MS, signal);
         } catch (err) {
           if (err instanceof WorkflowCancelledError) throw err;
-          // fall back to local branch ref if there's no "origin" remote configured
-          await run(
-            "git",
-            ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
-            project.repoLocalPath,
-            COMMAND_TIMEOUT_MS,
-            signal
-          );
+          // best-effort refresh; the fallbacks below cover no-"origin" repos
         }
-      } else {
-        // Resuming or chaining: the branch already exists as a local ref in
-        // the shared repo (worktree removal never deletes the branch
-        // itself), already carrying every commit made in any worktree tied
-        // to it — just attach a fresh worktree to it.
-        try {
-          await run(
-            "git",
-            ["worktree", "add", worktreePath, branchName],
-            project.repoLocalPath,
-            COMMAND_TIMEOUT_MS,
-            signal
-          );
-        } catch (err) {
-          if (err instanceof WorkflowCancelledError) throw err;
-          // The branch was persisted to the run but a crash struck before
-          // `git worktree add -b` itself ever completed, so it doesn't
-          // actually exist yet — create it now, same as a brand-new run.
+
+        if (isNewBranch) {
           try {
             await run(
               "git",
@@ -398,8 +396,9 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               COMMAND_TIMEOUT_MS,
               signal
             );
-          } catch (err2) {
-            if (err2 instanceof WorkflowCancelledError) throw err2;
+          } catch (err) {
+            if (err instanceof WorkflowCancelledError) throw err;
+            // fall back to local branch ref if there's no "origin" remote configured
             await run(
               "git",
               ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
@@ -407,6 +406,43 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               COMMAND_TIMEOUT_MS,
               signal
             );
+          }
+        } else {
+          // Resuming or chaining: the branch already exists as a local ref in
+          // the shared repo (worktree removal never deletes the branch
+          // itself), already carrying every commit made in any worktree tied
+          // to it — just attach a fresh worktree to it.
+          try {
+            await run(
+              "git",
+              ["worktree", "add", worktreePath, branchName],
+              project.repoLocalPath,
+              COMMAND_TIMEOUT_MS,
+              signal
+            );
+          } catch (err) {
+            if (err instanceof WorkflowCancelledError) throw err;
+            // The branch was persisted to the run but a crash struck before
+            // `git worktree add -b` itself ever completed, so it doesn't
+            // actually exist yet — create it now, same as a brand-new run.
+            try {
+              await run(
+                "git",
+                ["worktree", "add", worktreePath, "-b", branchName, `origin/${project.defaultBranch}`],
+                project.repoLocalPath,
+                COMMAND_TIMEOUT_MS,
+                signal
+              );
+            } catch (err2) {
+              if (err2 instanceof WorkflowCancelledError) throw err2;
+              await run(
+                "git",
+                ["worktree", "add", worktreePath, "-b", branchName, project.defaultBranch],
+                project.repoLocalPath,
+                COMMAND_TIMEOUT_MS,
+                signal
+              );
+            }
           }
         }
       }
@@ -574,6 +610,24 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             }
             await checkpoint(step);
           }
+
+          // Only pause on the pass where this step just finished — a later
+          // Continue call walks back through it to reach not-yet-done
+          // children (existingStatus is "completed" by then) and must not
+          // pause here again.
+          if (step.pauseAfter) {
+            await appendLog(
+              ctx,
+              `\n⏸ Dừng lại để review sau step "${step.name}". Sửa code trực tiếp tại: ${worktreePath}\nBấm "Continue" trên run này khi xong.`
+            );
+            const pausedUpdate = await prisma.workflowRun.update({
+              where: { id: runId },
+              data: { status: "paused" },
+            });
+            emitWorkflowRunUpdate({ ...pausedUpdate, workflow: { name: ctx.workflowName } });
+            didPause = true;
+            throw new WorkflowPausedError();
+          }
         }
 
         for (const child of childrenByParent.get(step.id) ?? []) {
@@ -596,7 +650,12 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
         await markTaskInReview();
       }
     } catch (err) {
-      if (err instanceof WorkflowCancelledError) {
+      if (err instanceof WorkflowPausedError) {
+        // Status/log were already set right before this was thrown — the
+        // task's own status is deliberately left untouched (still
+        // "in_progress"); the run itself being "paused" is what surfaces
+        // the "needs your review" signal in the UI.
+      } else if (err instanceof WorkflowCancelledError) {
         await appendLog(ctx, `\n✕ ${err.message}`);
         const cancelledUpdate = await prisma.workflowRun.update({
           where: { id: runId },
@@ -611,15 +670,19 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     }
   } finally {
     activeRuns.delete(runId);
-    try {
-      await run(
-        "git",
-        ["worktree", "remove", worktreePath, "--force"],
-        project.repoLocalPath,
-        COMMAND_TIMEOUT_MS
-      );
-    } catch {
-      rmSync(worktreePath, { recursive: true, force: true });
+    // A paused run keeps its worktree alive on disk so a human can edit it
+    // before Continue reattaches to this exact same directory.
+    if (!didPause) {
+      try {
+        await run(
+          "git",
+          ["worktree", "remove", worktreePath, "--force"],
+          project.repoLocalPath,
+          COMMAND_TIMEOUT_MS
+        );
+      } catch {
+        rmSync(worktreePath, { recursive: true, force: true });
+      }
     }
   }
 }

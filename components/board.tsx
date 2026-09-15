@@ -38,7 +38,10 @@ import { CreateTaskModal } from "@/components/create-task-modal";
 type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
 type Task = PrismaTask & { workflowRuns: RunWithWorkflow[] };
 
-const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
+// "paused" counts as active here too — it needs the same attention-getting
+// pulse and live socket subscription as an actually-running workflow,
+// since it's mid-flight and waiting on the user, not finished.
+const ACTIVE_RUN_STATUSES = new Set(["pending", "running", "paused"]);
 
 type ColumnsState = Record<TaskStatus, Task[]>;
 

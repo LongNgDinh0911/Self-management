@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
+import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { TaskWorkflowRuns } from "@/components/task-workflow-runs";
 import type {
@@ -37,6 +38,7 @@ export function TaskDetailPage({
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<"detail" | "workflow" | "planning">("detail");
+  const pausedRun = workflowRuns.find((r) => r.status === "paused");
 
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
@@ -128,6 +130,18 @@ export function TaskDetailPage({
               Jira: {task.jiraKey}
               <ArrowTopRightOnSquareIcon className="h-3 w-3" />
             </a>
+          )}
+          {pausedRun && (
+            <button
+              onClick={() => setActiveTab("workflow")}
+              className="ml-2 flex items-center gap-1 rounded px-1.5 py-0.5 text-xs hover:underline"
+              style={{
+                color: RUN_STATUS_META.paused.color,
+                backgroundColor: `${RUN_STATUS_META.paused.color}1a`,
+              }}
+            >
+              ⏸ Paused — cần review
+            </button>
           )}
           {saved && !dirty && <span className="ml-auto text-xs text-emerald-400">Đã lưu</span>}
         </div>

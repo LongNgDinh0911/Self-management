@@ -24,6 +24,7 @@ import {
   XMarkIcon,
   ArrowTopRightOnSquareIcon,
   PlusIcon,
+  PauseCircleIcon,
 } from "@heroicons/react/24/outline";
 import { STEP_TYPE_META, RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
@@ -161,7 +162,15 @@ function StepNode({ data, selected }: NodeProps<Node<StepNodeData>>) {
           <AddChildButton onAdd={data.onAddChild} />
         </div>
       </div>
-      <p className="text-sm font-medium text-neutral-100">{step.name}</p>
+      <p className="flex items-center gap-1 text-sm font-medium text-neutral-100">
+        {step.name}
+        {step.pauseAfter && (
+          <PauseCircleIcon
+            className="h-3.5 w-3.5 shrink-0 text-yellow-500"
+            aria-label="Dừng lại để review sau step này"
+          />
+        )}
+      </p>
       <p className="mt-1 line-clamp-2 text-xs text-neutral-500">{meta.description}</p>
       <Handle type="source" position={Position.Right} className="!bg-neutral-600" />
     </div>

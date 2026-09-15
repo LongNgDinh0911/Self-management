@@ -133,6 +133,7 @@ enum WorkflowRunStatus {
   failed
   cancelled
   crashed
+  paused
 }
 
 model Workflow {
@@ -153,12 +154,15 @@ model Workflow {
 }
 
 model WorkflowStep {
-  id      String           @id @default(cuid())
-  order   Int              // sibling order — position among steps sharing the same parent
-  type    WorkflowStepType
-  name    String
-  enabled Boolean          @default(true)
-  config  String           @default("{}")
+  id         String           @id @default(cuid())
+  order      Int              // sibling order — position among steps sharing the same parent
+  type       WorkflowStepType
+  name       String
+  enabled    Boolean          @default(true)
+  config     String           @default("{}")
+  // Pauses the run right after this step finishes, before it recurses into
+  // children, so a human can review/edit the worktree before continuing.
+  pauseAfter Boolean          @default(false)
 
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   workflowId String
@@ -178,6 +182,11 @@ model WorkflowRun {
   id            String            @id @default(cuid())
   status        WorkflowRunStatus @default(pending)
   branchName    String?
+  // Persisted so a paused (or crashed) run can reattach to the SAME
+  // worktree directory instead of creating a fresh one — a fresh one
+  // would only have whatever was already committed, losing any edits a
+  // human made while the run was paused for review.
+  worktreePath  String?
   prUrl         String?
   log           String            @default("")
   // JSON object mapping stepId -> "completed" | "pruned", used both to
