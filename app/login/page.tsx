@@ -2,6 +2,7 @@
 
 import { Suspense, useState, FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Logo } from "@/components/logo";
 
 export default function LoginPage() {
   return (
@@ -52,10 +53,13 @@ function LoginForm() {
         onSubmit={handleSubmit}
         className="w-full max-w-xs rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-xl"
       >
-        <h1 className="mb-1 text-lg font-semibold text-neutral-100">
+        <div className="mb-5 flex justify-center">
+          <Logo size={40} iconOnly href={null} />
+        </div>
+        <h1 className="mb-1 text-center text-lg font-semibold text-neutral-100">
           Self Management
         </h1>
-        <p className="mb-6 text-sm text-neutral-400">Nhập PIN để mở khóa</p>
+        <p className="mb-6 text-center text-sm text-neutral-400">Nhập PIN để mở khóa</p>
 
         <input
           type="password"

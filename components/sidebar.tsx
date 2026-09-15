@@ -12,6 +12,7 @@ import {
   FolderIcon,
 } from "@heroicons/react/24/outline";
 import { PROJECT_COLORS } from "@/lib/constants";
+import { Logo } from "@/components/logo";
 
 type Project = {
   id: string;
@@ -69,9 +70,7 @@ export function Sidebar({
   return (
     <aside className="flex h-screen w-60 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
       <div className="flex items-center justify-between px-4 py-4">
-        <span className="text-sm font-semibold text-neutral-100">
-          Self Management
-        </span>
+        <Logo size={24} />
       </div>
 
       <div className="flex-1 overflow-y-auto px-2">
