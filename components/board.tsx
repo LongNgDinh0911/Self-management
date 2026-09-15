@@ -25,6 +25,7 @@ import { PlusIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
+import { useTaskUpdates } from "@/lib/use-task-updates";
 import type {
   Project,
   Task as PrismaTask,
@@ -98,6 +99,38 @@ export function Board({
           t.id === updatedRun.taskId ? { ...t, workflowRuns: [updatedRun] } : t
         ),
       };
+    });
+  });
+
+  useTaskUpdates<Task>(project.id, (updatedTask) => {
+    setColumns((prev) => {
+      let existing: Task | undefined;
+      for (const status of Object.keys(prev) as TaskStatus[]) {
+        const match = prev[status].find((t) => t.id === updatedTask.id);
+        if (match) {
+          existing = match;
+          break;
+        }
+      }
+      // Ignore stale events (e.g. a reconnect snapshot racing a more recent
+      // optimistic update already applied locally) — updatedAt only moves
+      // forward on the server, so an older value here means this event is
+      // out of order and should be dropped rather than clobbering newer state.
+      if (
+        existing &&
+        new Date(existing.updatedAt).getTime() > new Date(updatedTask.updatedAt).getTime()
+      ) {
+        return prev;
+      }
+
+      const next = { ...prev };
+      for (const status of Object.keys(next) as TaskStatus[]) {
+        next[status] = next[status].filter((t) => t.id !== updatedTask.id);
+      }
+      next[updatedTask.status] = [...next[updatedTask.status], updatedTask].sort(
+        (a, b) => a.order - b.order
+      );
+      return next;
     });
   });
 
