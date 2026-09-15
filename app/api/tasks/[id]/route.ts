@@ -22,6 +22,9 @@ export async function PATCH(
   if (body.jiraUrl === null || typeof body.jiraUrl === "string") {
     data.jiraUrl = body.jiraUrl?.trim() || null;
   }
+  if (body.prUrl === null || typeof body.prUrl === "string") {
+    data.prUrl = body.prUrl?.trim() || null;
+  }
   if (body.estimate === null || typeof body.estimate === "number") {
     data.estimate = body.estimate;
   }

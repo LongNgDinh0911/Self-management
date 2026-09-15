@@ -70,6 +70,8 @@ model Task {
   jiraKey     String?
   jiraUrl     String?
 
+  prUrl       String?
+
   project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId   String
 

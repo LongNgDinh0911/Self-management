@@ -19,6 +19,10 @@ import type {
 type WorkflowOption = { id: string; name: string; active: boolean };
 type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
 
+function prNumberFromUrl(url: string): string | null {
+  return url.match(/\/pull\/(\d+)/)?.[1] ?? null;
+}
+
 export function TaskDetailPage({
   project,
   task,
@@ -122,6 +126,17 @@ export function TaskDetailPage({
               className="ml-2 flex items-center gap-1 rounded bg-blue-500/10 px-1.5 py-0.5 text-xs text-blue-400 hover:underline"
             >
               Jira: {task.jiraKey}
+              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+            </a>
+          )}
+          {task.prUrl && (
+            <a
+              href={task.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 flex items-center gap-1 rounded bg-indigo-500/10 px-1.5 py-0.5 text-xs text-indigo-400 hover:underline"
+            >
+              PR{prNumberFromUrl(task.prUrl) ? ` #${prNumberFromUrl(task.prUrl)}` : ""}
               <ArrowTopRightOnSquareIcon className="h-3 w-3" />
             </a>
           )}
