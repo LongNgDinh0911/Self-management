@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { emitTaskUpdate, taskWithRelationsInclude } from "@/lib/socket";
 import type { TaskPriority, TaskStatus, TaskType } from "@/app/generated/prisma/client";
 
 export async function PATCH(
@@ -32,7 +33,12 @@ export async function PATCH(
     data.dueDate = body.dueDate ? new Date(body.dueDate) : null;
   }
 
-  const task = await prisma.task.update({ where: { id }, data });
+  const task = await prisma.task.update({
+    where: { id },
+    data,
+    include: taskWithRelationsInclude,
+  });
+  emitTaskUpdate(task);
   return NextResponse.json(task);
 }
 
