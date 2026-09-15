@@ -25,18 +25,28 @@ export function useWorkflowRunUpdates<T extends { id: string }>(
     const socket = getSocket();
     const ids = idsKey.split(",");
 
+    function subscribe() {
+      socket.emit("subscribe:workflow-run", ids, (runs: T[]) => {
+        for (const run of runs) onUpdateRef.current(run);
+      });
+    }
+
     function handleUpdate(run: T) {
       if (ids.includes(run.id)) onUpdateRef.current(run);
     }
 
-    socket.emit("subscribe:workflow-run", ids, (runs: T[]) => {
-      for (const run of runs) onUpdateRef.current(run);
-    });
+    subscribe();
     socket.on("workflow-run:update", handleUpdate);
+    // A reconnect (dropped transport, server restart) gets a brand new
+    // server-side socket with no memory of which rooms this client had
+    // joined — without rejoining here, updates silently stop flowing after
+    // any reconnect even though the client believes it's still subscribed.
+    socket.on("connect", subscribe);
 
     return () => {
       socket.emit("unsubscribe:workflow-run", ids);
       socket.off("workflow-run:update", handleUpdate);
+      socket.off("connect", subscribe);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey]);

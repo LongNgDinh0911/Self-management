@@ -33,6 +33,14 @@ app.prepare().then(async () => {
   await reconcileOrphanedWorkflowRuns();
 
   httpServer.on("request", (req, res) => {
+    // Socket.IO registers its own "request" listener when constructed above
+    // and handles anything under this path itself. Node fires every
+    // "request" listener for every request regardless of what an earlier
+    // one did, so without this guard Next's handler races Socket.IO's own
+    // handling of the same request — sometimes winning and answering with
+    // its own 404, sometimes losing and throwing ERR_HTTP_HEADERS_SENT
+    // after Socket.IO already responded.
+    if (req.url?.startsWith("/socket.io")) return;
     handle(req, res);
   });
 

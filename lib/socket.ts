@@ -5,7 +5,14 @@ import type { WorkflowRun } from "@/app/generated/prisma/client";
 
 type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
 
-let io: SocketIOServer | null = null;
+// A plain module-level variable here would NOT actually be shared between
+// server.ts (which calls setIO, run directly by tsx) and code reached
+// through Next's own dev-mode bundler (API routes, and anything they call
+// into like the workflow runner) — same reason lib/prisma.ts stashes its
+// client on globalThis instead of a bare module variable. Without this,
+// emitWorkflowRunUpdate silently sees io as null and every broadcast is a
+// no-op, even though the socket itself joined its room just fine.
+const globalForSocket = globalThis as unknown as { io: SocketIOServer | undefined };
 
 function parseCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;
@@ -21,9 +28,9 @@ function runRoom(runId: string) {
 }
 
 export function setIO(server: SocketIOServer) {
-  io = server;
+  globalForSocket.io = server;
 
-  io.use(async (socket, next) => {
+  server.use(async (socket, next) => {
     const token = parseCookie(socket.handshake.headers.cookie, SESSION_COOKIE);
     const unlocked = await verifySessionToken(token);
     if (!unlocked) {
@@ -33,7 +40,7 @@ export function setIO(server: SocketIOServer) {
     next();
   });
 
-  io.on("connection", (socket: Socket) => {
+  server.on("connection", (socket: Socket) => {
     socket.on("subscribe:workflow-run", async (runIds: string[], ack?: (runs: RunWithWorkflow[]) => void) => {
       if (!Array.isArray(runIds) || runIds.length === 0) {
         ack?.([]);
@@ -59,9 +66,9 @@ export function setIO(server: SocketIOServer) {
 }
 
 export function getIO() {
-  return io;
+  return globalForSocket.io ?? null;
 }
 
 export function emitWorkflowRunUpdate(run: RunWithWorkflow) {
-  io?.to(runRoom(run.id)).emit("workflow-run:update", run);
+  globalForSocket.io?.to(runRoom(run.id)).emit("workflow-run:update", run);
 }
