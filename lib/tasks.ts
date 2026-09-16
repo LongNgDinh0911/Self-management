@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { taskWithRelationsInclude } from "@/lib/socket";
 import type { TaskPriority, TaskStatus, TaskType } from "@/app/generated/prisma/client";
 
 export type CreateTaskInput = {
@@ -57,4 +58,25 @@ export async function createTask(projectId: string, input: CreateTaskInput) {
       },
     });
   });
+}
+
+export async function setTaskArchived(id: string, archived: boolean) {
+  return prisma.task.update({
+    where: { id },
+    data: { archivedAt: archived ? new Date() : null },
+    include: taskWithRelationsInclude,
+  });
+}
+
+export async function bulkSetTasksArchived(taskIds: string[], archived: boolean) {
+  const archivedAt = archived ? new Date() : null;
+  return prisma.$transaction(
+    taskIds.map((id) =>
+      prisma.task.update({
+        where: { id },
+        data: { archivedAt },
+        include: taskWithRelationsInclude,
+      })
+    )
+  );
 }

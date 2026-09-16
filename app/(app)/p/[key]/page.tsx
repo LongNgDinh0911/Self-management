@@ -13,6 +13,7 @@ export default async function ProjectBoardPage({
     where: { key: key.toUpperCase() },
     include: {
       tasks: {
+        where: { archivedAt: null },
         orderBy: { order: "asc" },
         include: {
           workflowRuns: {

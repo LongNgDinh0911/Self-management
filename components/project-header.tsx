@@ -14,6 +14,7 @@ export function ProjectHeader({
   const tabs = [
     { label: "Board", href: base },
     { label: "Workflows", href: `${base}/workflows` },
+    { label: "Archived", href: `${base}/archived` },
     { label: "Settings", href: `${base}/settings` },
   ];
 

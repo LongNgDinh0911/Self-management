@@ -3,7 +3,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeftIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
+import {
+  ArchiveBoxIcon,
+  ArchiveBoxXMarkIcon,
+  ArrowLeftIcon,
+  ArrowTopRightOnSquareIcon,
+} from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { MarkdownEditor } from "@/components/markdown-editor";
@@ -55,6 +60,10 @@ export function TaskDetailPage({
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [archivedAt, setArchivedAt] = useState<string | null>(
+    task.archivedAt ? new Date(task.archivedAt).toISOString() : null
+  );
+  const [archiving, setArchiving] = useState(false);
 
   const dirty =
     title !== task.title ||
@@ -92,6 +101,21 @@ export function TaskDetailPage({
     }
 
     setSaved(true);
+    router.refresh();
+  }
+
+  async function handleToggleArchive() {
+    setArchiving(true);
+    const res = await fetch(`/api/tasks/${task.id}/${archivedAt ? "unarchive" : "archive"}`, {
+      method: "POST",
+    });
+    setArchiving(false);
+    if (!res.ok) {
+      setError(archivedAt ? "Không khôi phục được task" : "Không lưu trữ được task");
+      return;
+    }
+    const updated = await res.json();
+    setArchivedAt(updated.archivedAt);
     router.refresh();
   }
 
@@ -145,6 +169,23 @@ export function TaskDetailPage({
           )}
           {saved && !dirty && <span className="ml-auto text-xs text-emerald-400">Đã lưu</span>}
         </div>
+
+        {archivedAt && (
+          <div className="mb-5 flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+            <span className="flex items-center gap-1.5 text-xs text-amber-400">
+              <ArchiveBoxIcon className="h-3.5 w-3.5" />
+              Đã lưu trữ lúc {new Date(archivedAt).toLocaleString("vi-VN")} — ẩn khỏi board và
+              backlog.
+            </span>
+            <button
+              onClick={handleToggleArchive}
+              disabled={archiving}
+              className="shrink-0 rounded px-2 py-1 text-xs font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
+            >
+              {archiving ? "Đang khôi phục..." : "Khôi phục"}
+            </button>
+          </div>
+        )}
 
         <div className="mb-6 flex items-center gap-1 border-b border-neutral-800">
           <TabButton active={activeTab === "detail"} onClick={() => setActiveTab("detail")}>
@@ -299,12 +340,30 @@ export function TaskDetailPage({
           {activeTab !== "detail" ? (
             <span />
           ) : !confirmDelete ? (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className="text-sm text-red-400 hover:text-red-300"
-            >
-              Xóa task
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleToggleArchive}
+                disabled={archiving}
+                className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+              >
+                {archivedAt ? (
+                  <ArchiveBoxXMarkIcon className="h-4 w-4" />
+                ) : (
+                  <ArchiveBoxIcon className="h-4 w-4" />
+                )}
+                {archiving
+                  ? "Đang xử lý..."
+                  : archivedAt
+                    ? "Khôi phục task"
+                    : "Lưu trữ task"}
+              </button>
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-sm text-red-400 hover:text-red-300"
+              >
+                Xóa task
+              </button>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <span className="text-sm text-neutral-400">Xóa vĩnh viễn task này?</span>

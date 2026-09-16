@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -21,7 +21,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { PlusIcon } from "@heroicons/react/24/outline";
+import { ArchiveBoxIcon, PlusIcon } from "@heroicons/react/24/outline";
 import { STATUS_COLUMNS, PRIORITY_META, TASK_TYPE_META } from "@/lib/constants";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
@@ -69,6 +69,9 @@ export function Board({
   const [columns, setColumns] = useState<ColumnsState>(() => groupTasks(initialTasks));
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [undoToast, setUndoToast] = useState<{ id: string; title: string } | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Re-derive columns whenever the server hands us a new initialTasks
   // snapshot (e.g. after router.refresh()), so a fresh page/socket-driven
@@ -130,12 +133,69 @@ export function Board({
       for (const status of Object.keys(next) as TaskStatus[]) {
         next[status] = next[status].filter((t) => t.id !== updatedTask.id);
       }
-      next[updatedTask.status] = [...next[updatedTask.status], updatedTask].sort(
-        (a, b) => a.order - b.order
-      );
+      // Archived tasks are hidden from the board entirely — an event for one
+      // (archived elsewhere, or by this client's own optimistic call racing
+      // the reconnect snapshot) should only ever remove it, never re-add it.
+      if (!updatedTask.archivedAt) {
+        next[updatedTask.status] = [...next[updatedTask.status], updatedTask].sort(
+          (a, b) => a.order - b.order
+        );
+      }
       return next;
     });
   });
+
+  async function archiveTask(task: Task) {
+    setColumns((prev) => ({
+      ...prev,
+      [task.status]: prev[task.status].filter((t) => t.id !== task.id),
+    }));
+    setUndoToast({ id: task.id, title: task.title });
+    await fetch(`/api/tasks/${task.id}/archive`, { method: "POST" });
+  }
+
+  async function undoArchive(taskId: string) {
+    setUndoToast(null);
+    const res = await fetch(`/api/tasks/${taskId}/unarchive`, { method: "POST" });
+    if (!res.ok) return;
+    const restored = (await res.json()) as Task;
+    setColumns((prev) => ({
+      ...prev,
+      [restored.status]: [...prev[restored.status], restored].sort((a, b) => a.order - b.order),
+    }));
+  }
+
+  function toggleSelected(taskId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function archiveSelected() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setColumns((prev) => {
+      const next = { ...prev };
+      for (const status of Object.keys(next) as TaskStatus[]) {
+        next[status] = next[status].filter((t) => !selectedIds.has(t.id));
+      }
+      return next;
+    });
+    exitSelectMode();
+    await fetch("/api/tasks/archive-bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ taskIds: ids, archived: true }),
+    });
+  }
 
   useEffect(() => {
     function handleVisibilityChange() {
@@ -229,7 +289,35 @@ export function Board({
     <div className="flex h-full flex-col">
       <ProjectHeader project={project} />
 
-      <div className="flex justify-end border-b border-neutral-800 px-5 py-2">
+      <div className="flex items-center justify-between border-b border-neutral-800 px-5 py-2">
+        {selectMode ? (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-neutral-400">
+              {selectedIds.size > 0 ? `${selectedIds.size} đã chọn` : "Chọn task để lưu trữ"}
+            </span>
+            <button
+              onClick={archiveSelected}
+              disabled={selectedIds.size === 0}
+              className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ArchiveBoxIcon className="h-3.5 w-3.5" />
+              Lưu trữ ({selectedIds.size})
+            </button>
+            <button
+              onClick={exitSelectMode}
+              className="rounded-md px-3 py-1.5 text-xs text-neutral-400 hover:text-neutral-200"
+            >
+              Hủy
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setSelectMode(true)}
+            className="rounded-md px-2.5 py-1.5 text-xs text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+          >
+            Chọn nhiều
+          </button>
+        )}
         <button
           onClick={() => setShowCreateModal(true)}
           className="flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
@@ -256,13 +344,20 @@ export function Board({
               tasks={columns[column.key]}
               projectId={project.id}
               projectKey={project.key}
-              onTaskClick={(task) => router.push(`/p/${project.key}/t/${task.number}`)}
+              onTaskClick={(task) =>
+                selectMode
+                  ? toggleSelected(task.id)
+                  : router.push(`/p/${project.key}/t/${task.number}`)
+              }
               onTaskCreated={(task) =>
                 setColumns((prev) => ({
                   ...prev,
                   [task.status]: [...prev[task.status], { ...task, workflowRuns: [] }],
                 }))
               }
+              onArchive={archiveTask}
+              selectMode={selectMode}
+              selectedIds={selectedIds}
             />
           ))}
         </div>
@@ -289,6 +384,51 @@ export function Board({
           }}
         />
       )}
+
+      {undoToast && (
+        <ArchiveUndoToast
+          toastId={undoToast.id}
+          title={undoToast.title}
+          onUndo={() => undoArchive(undoToast.id)}
+          onDismiss={() => setUndoToast(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ArchiveUndoToast({
+  toastId,
+  title,
+  onUndo,
+  onDismiss,
+}: {
+  toastId: string;
+  title: string;
+  onUndo: () => void;
+  onDismiss: () => void;
+}) {
+  // Re-archiving another task while a toast is already showing swaps title
+  // via a prop update rather than a remount, so the auto-dismiss timer is
+  // keyed off toastId (not the onDismiss closure, which is a fresh function
+  // every render) to give each newly-archived task its own full 6s window.
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
+  useEffect(() => {
+    const timer = setTimeout(() => onDismissRef.current(), 6000);
+    return () => clearTimeout(timer);
+  }, [toastId]);
+
+  return (
+    <div className="fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-2.5 text-sm shadow-xl">
+      <span className="text-neutral-300">
+        Đã lưu trữ <span className="font-medium text-neutral-100">{title}</span>
+      </span>
+      <button onClick={onUndo} className="font-medium text-indigo-400 hover:text-indigo-300">
+        Hoàn tác
+      </button>
     </div>
   );
 }
@@ -301,6 +441,9 @@ function Column({
   projectKey,
   onTaskClick,
   onTaskCreated,
+  onArchive,
+  selectMode,
+  selectedIds,
 }: {
   status: TaskStatus;
   label: string;
@@ -309,6 +452,9 @@ function Column({
   projectKey: string;
   onTaskClick: (task: Task) => void;
   onTaskCreated: (task: PrismaTask) => void;
+  onArchive: (task: Task) => void;
+  selectMode: boolean;
+  selectedIds: Set<string>;
 }) {
   const { setNodeRef } = useDroppable({ id: status });
   const [adding, setAdding] = useState(false);
@@ -354,6 +500,9 @@ function Column({
               task={task}
               projectKey={projectKey}
               onClick={() => onTaskClick(task)}
+              onArchive={() => onArchive(task)}
+              selectMode={selectMode}
+              selected={selectedIds.has(task.id)}
             />
           ))}
         </SortableContext>
@@ -388,13 +537,23 @@ function SortableTaskCard({
   task,
   projectKey,
   onClick,
+  onArchive,
+  selectMode,
+  selected,
 }: {
   task: Task;
   projectKey: string;
   onClick: () => void;
+  onArchive: () => void;
+  selectMode: boolean;
+  selected: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
+    // Selecting tasks for bulk actions shouldn't also let a click-drag
+    // shuffle them between columns — disabling the sortable behavior here
+    // is simpler than teaching handleDragEnd to ignore select-mode drags.
+    disabled: selectMode,
   });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -402,8 +561,15 @@ function SortableTaskCard({
     opacity: isDragging ? 0.4 : 1,
   };
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard task={task} projectKey={projectKey} onClick={onClick} />
+    <div ref={setNodeRef} style={style} {...attributes} {...(selectMode ? {} : listeners)}>
+      <TaskCard
+        task={task}
+        projectKey={projectKey}
+        onClick={onClick}
+        onArchive={selectMode ? undefined : onArchive}
+        selectMode={selectMode}
+        selected={selected}
+      />
     </div>
   );
 }
@@ -412,11 +578,17 @@ function TaskCard({
   task,
   projectKey,
   onClick,
+  onArchive,
+  selectMode,
+  selected,
   dragging,
 }: {
   task: Task;
   projectKey: string;
   onClick: () => void;
+  onArchive?: () => void;
+  selectMode?: boolean;
+  selected?: boolean;
   dragging?: boolean;
 }) {
   const priority = PRIORITY_META[task.priority];
@@ -425,13 +597,44 @@ function TaskCard({
   const runMeta = latestRun ? RUN_STATUS_META[latestRun.status] : null;
   const runActive = latestRun ? ACTIVE_RUN_STATUSES.has(latestRun.status) : false;
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className={`w-full rounded-lg border border-neutral-800 bg-neutral-900 p-2.5 text-left shadow-sm hover:border-neutral-700 ${
-        dragging ? "shadow-lg" : ""
-      }`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className={`group/card relative w-full rounded-lg border p-2.5 text-left shadow-sm ${
+        selected
+          ? "border-indigo-500 bg-indigo-500/10"
+          : "border-neutral-800 bg-neutral-900 hover:border-neutral-700"
+      } ${dragging ? "shadow-lg" : ""}`}
     >
-      <div className="mb-1 flex items-center justify-between">
+      {selectMode && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          readOnly
+          className="absolute right-1.5 top-1.5 z-10 h-3.5 w-3.5 rounded border-neutral-600 bg-neutral-800 text-indigo-500"
+        />
+      )}
+      {onArchive && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onArchive();
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          title="Lưu trữ task"
+          className="absolute right-1.5 top-1.5 z-10 rounded p-1 text-neutral-600 opacity-0 hover:bg-neutral-800 hover:text-neutral-200 group-hover/card:opacity-100"
+        >
+          <ArchiveBoxIcon className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <div className="mb-1 flex items-center justify-between pr-5">
         <span className="flex items-center gap-1 text-[11px] text-neutral-500">
           <type.icon className="h-3 w-3 shrink-0" style={{ color: type.color }} aria-label={type.label} />
           {projectKey}-{task.number}
@@ -475,6 +678,6 @@ function TaskCard({
           )}
         </div>
       )}
-    </button>
+    </div>
   );
 }
