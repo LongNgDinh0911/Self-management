@@ -45,6 +45,8 @@ next-env.d.ts
 # sqlite db (local data, not committed)
 /dev.db
 /dev.db-journal
+/prisma/dev.db
+/prisma/dev.db-journal
 
 # auto-generated agent skill docs (from `prisma init`), not app code
 /.agents
