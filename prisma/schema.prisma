@@ -87,6 +87,11 @@ model Task {
 
   prUrl       String?
 
+  // Soft-archive: null means active/visible everywhere. Set to the archive
+  // timestamp instead of a boolean so the Archived view can sort by when a
+  // task was put away, and so this can double as an audit trail later.
+  archivedAt  DateTime?
+
   project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId   String
 
@@ -95,6 +100,7 @@ model Task {
 
   @@unique([projectId, number])
   @@index([projectId, status])
+  @@index([projectId, archivedAt])
 }
 
 model Label {

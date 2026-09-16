@@ -85,7 +85,7 @@ export function setIO(server: SocketIOServer) {
         }
         socket.join(boardRoom(projectId));
         const tasks = await prisma.task.findMany({
-          where: { projectId },
+          where: { projectId, archivedAt: null },
           orderBy: { order: "asc" },
           include: taskWithRelationsInclude,
         });
