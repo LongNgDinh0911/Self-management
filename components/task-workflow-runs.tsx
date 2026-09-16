@@ -11,6 +11,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { RUN_STATUS_META } from "@/lib/workflow-constants";
 import { useWorkflowRunUpdates } from "@/lib/use-workflow-run-updates";
+import { MarkdownView } from "@/components/markdown-editor";
 import type { WorkflowRun } from "@/app/generated/prisma/client";
 
 type RunWithWorkflow = WorkflowRun & { workflow: { name: string } };
@@ -432,6 +433,17 @@ export function TaskWorkflowRuns({
                         {diffText[run.id] || "(không có thay đổi)"}
                       </pre>
                     )}
+                  </div>
+                )}
+
+                {expanded && run.planning && (
+                  <div className="mt-2 rounded-md border border-neutral-800 bg-neutral-950 p-2.5">
+                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+                      Planning của lần chạy này
+                    </p>
+                    <div className="max-h-80 overflow-auto text-sm">
+                      <MarkdownView value={run.planning} />
+                    </div>
                   </div>
                 )}
 

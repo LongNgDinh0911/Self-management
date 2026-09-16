@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +11,7 @@ import type {
 } from "@/lib/workflow-constants";
 import type { WorkflowStep, TaskType, TaskPriority, TaskStatus } from "@/app/generated/prisma/client";
 
-const AI_STEP_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const AI_STEP_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 type RunContext = {
@@ -61,6 +61,153 @@ async function appendLog(ctx: RunContext, line: string) {
   emitWorkflowRunUpdate({ ...updated, workflow: { name: ctx.workflowName } });
 }
 
+// Buffers text pushed by runClaude()'s NDJSON parser and flushes it into
+// the run log at most once a second — parsed events can arrive several
+// times a second (every tool call, every text block), and writing each one
+// straight to the DB + socket would hammer both for no visible benefit.
+function createLogStreamer(ctx: RunContext) {
+  const FLUSH_INTERVAL_MS = 1000;
+  let buffer = "";
+  let timer: NodeJS.Timeout | null = null;
+
+  async function flush() {
+    if (!buffer) return;
+    const text = buffer;
+    buffer = "";
+    // Raw append (unlike appendLog) — chunks don't align to line
+    // boundaries, so forcing a newline between them would fragment
+    // ordinary sentences and words.
+    ctx.log += text;
+    const updated = await prisma.workflowRun.update({ where: { id: ctx.runId }, data: { log: ctx.log } });
+    emitWorkflowRunUpdate({ ...updated, workflow: { name: ctx.workflowName } });
+  }
+
+  return {
+    push(chunk: string) {
+      buffer += chunk;
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        flush().catch(() => {});
+      }, FLUSH_INTERVAL_MS);
+    },
+    async finish() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      await flush();
+    },
+  };
+}
+
+// Short one-line summary of a tool call for the run log — full inputs
+// (a whole file's new contents for Write/Edit, etc.) would bloat the log
+// far past what's useful to skim while a step is in progress.
+function summarizeToolUse(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case "Bash":
+      return `Bash: ${String(input.command ?? "").slice(0, 200)}`;
+    case "Write":
+      return `Write ${input.file_path ?? ""}`;
+    case "Edit":
+      return `Edit ${input.file_path ?? ""}`;
+    case "Read":
+      return `Read ${input.file_path ?? ""}`;
+    case "Glob":
+      return `Glob ${input.pattern ?? ""}`;
+    case "Grep":
+      return `Grep ${input.pattern ?? ""}`;
+    default:
+      return name;
+  }
+}
+
+// Runs `claude -p` and streams progress into the run log as it works,
+// instead of the caller waiting in silence for the whole invocation to
+// finish. The default `--output-format text` turns out to buffer its ENTIRE
+// response and print nothing until the process exits (verified empirically
+// — plain stdout piping gives no incremental signal at all), so getting any
+// live progress requires switching to `--output-format stream-json`, which
+// emits one JSON object per line as things happen: tool calls, assistant
+// prose, and a final "result" event carrying the complete answer text.
+// Returns that final text — NOT the raw NDJSON stdout, which is wire
+// format, not the actual output callers (e.g. Planning, which saves this
+// as the task's plan) care about.
+async function runClaude(
+  prompt: string,
+  cwd: string,
+  timeoutMs: number,
+  signal: AbortSignal,
+  ctx: RunContext
+): Promise<string> {
+  const streamer = createLogStreamer(ctx);
+  // Separates the streamed content from the "▶ ..." banner line the
+  // caller just logged (that appendLog call has no trailing newline of its
+  // own), so text/tool-use output never runs straight into it.
+  streamer.push("\n");
+  let lineBuffer = "";
+  let finalText = "";
+
+  function handleLine(line: string) {
+    if (!line.trim()) return;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return; // stray non-JSON noise on stdout — ignore rather than crash the run
+    }
+    if (event.type === "assistant") {
+      const message = event.message as { content?: Record<string, unknown>[] } | undefined;
+      for (const block of message?.content ?? []) {
+        if (block.type === "text" && typeof block.text === "string" && block.text) {
+          streamer.push(block.text);
+        } else if (block.type === "tool_use") {
+          const summary = summarizeToolUse(
+            String(block.name),
+            (block.input as Record<string, unknown>) ?? {}
+          );
+          streamer.push(`\n→ ${summary}\n`);
+        }
+      }
+    } else if (event.type === "result" && typeof event.result === "string") {
+      finalText = event.result;
+    }
+  }
+
+  function handleChunk(chunk: string) {
+    lineBuffer += chunk;
+    const lines = lineBuffer.split("\n");
+    lineBuffer = lines.pop() ?? "";
+    for (const line of lines) handleLine(line);
+  }
+
+  try {
+    await run(
+      "claude",
+      ["-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"],
+      cwd,
+      timeoutMs,
+      signal,
+      handleChunk
+    );
+  } catch (err) {
+    if (lineBuffer.trim()) handleLine(lineBuffer);
+    await streamer.finish();
+    if (err instanceof WorkflowCancelledError) throw err;
+    // Drop the raw NDJSON dump `run()` would otherwise fold into the error
+    // (stdout is wire format, not something a human should have to read) —
+    // keep just the failure header plus whatever text we did manage to
+    // parse before things went wrong.
+    const header = err instanceof Error ? err.message.split("\n")[0] : String(err);
+    throw new Error(finalText ? `${header}\n${finalText}` : header);
+  }
+
+  if (lineBuffer.trim()) handleLine(lineBuffer);
+  await streamer.finish();
+  return finalText;
+}
+
 function renderTemplate(
   template: string,
   vars: { title: string; description: string; key: string; planning: string }
@@ -84,7 +231,8 @@ function run(
   args: string[],
   cwd: string,
   timeoutMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onChunk?: (chunk: string) => void
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -112,6 +260,7 @@ function run(
 
     child.stdout?.on("data", (chunk) => {
       stdout += chunk;
+      onChunk?.(chunk.toString());
       if (stdout.length > 20 * 1024 * 1024) child.kill("SIGKILL");
     });
     child.stderr?.on("data", (chunk) => {
@@ -187,7 +336,12 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   const run_ = await prisma.workflowRun.findUnique({
     where: { id: runId },
     include: {
-      workflow: { include: { steps: { orderBy: { order: "asc" } }, project: true } },
+      workflow: {
+        include: {
+          steps: { orderBy: { order: "asc" } },
+          project: { include: { projectSkills: { include: { skill: true } } } },
+        },
+      },
       task: true,
       parentRun: true,
     },
@@ -196,6 +350,7 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
 
   const { workflow, task } = run_;
   const project = workflow.project;
+  const skillsById = new Map(project.projectSkills.map((ps) => [ps.skill.id, ps.skill]));
   ctx.workflowName = workflow.name;
   const wasPaused = run_.status === "paused";
 
@@ -264,10 +419,14 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
 
   // stepStatuses: "completed" (ran normally, or a condition whose gate
   // stayed open — either way its children still run) vs "pruned" (a
-  // condition's gate closed, so its whole subtree is skipped). On resume,
-  // a step already marked here has its own action skipped, but "completed"
-  // ones still recurse into children in case not all of them finished.
-  const stepStatuses: Record<string, "completed" | "pruned"> = JSON.parse(run_.stepStatuses || "{}");
+  // condition's gate closed, so its whole subtree is skipped) vs "planned"
+  // (a Planning step generated its plan and paused — Continue runs it
+  // through its second phase: executing that plan). On resume, a step
+  // already marked here has its own action skipped, but "completed" ones
+  // still recurse into children in case not all of them finished.
+  const stepStatuses: Record<string, "completed" | "pruned" | "planned"> = JSON.parse(
+    run_.stepStatuses || "{}"
+  );
   const alreadyDoneCount = Object.keys(stepStatuses).length;
 
   await appendLog(
@@ -313,7 +472,10 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
   // resumes without redoing this step (or, for a pruned branch, without
   // ever revisiting its subtree), and the work already done is safe on the
   // branch even if the temp worktree directory itself is later lost.
-  async function checkpoint(step: WorkflowStep, status: "completed" | "pruned" = "completed") {
+  async function checkpoint(
+    step: WorkflowStep,
+    status: "completed" | "pruned" | "planned" = "completed"
+  ) {
     const { stdout: statusOut } = await run(
       "git",
       ["status", "--porcelain"],
@@ -447,6 +609,59 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
         }
       }
 
+      // Materialize this project's instruction + enabled skills into the
+      // worktree using Claude Code's own native conventions, so every AI
+      // step run here picks them up automatically — same as if a developer
+      // had them checked out locally. These are scaffold files specific to
+      // this run, not part of the project's real source, so they're kept
+      // out of `git add -A` via .git/info/exclude (added to checkpoint()'s
+      // sole gitignore-equivalent knob) rather than ever being committed.
+      {
+        const claudeDir = path.join(worktreePath, ".claude");
+        mkdirSync(claudeDir, { recursive: true });
+        const excludeEntries: string[] = [];
+
+        if (project.instruction && project.instruction.trim()) {
+          writeFileSync(path.join(claudeDir, "CLAUDE.local.md"), project.instruction);
+          excludeEntries.push(".claude/CLAUDE.local.md");
+        }
+
+        for (const ps of project.projectSkills) {
+          const skill = ps.skill;
+          const skillDir = path.join(claudeDir, "skills", skill.name);
+          mkdirSync(skillDir, { recursive: true });
+          writeFileSync(
+            path.join(skillDir, "SKILL.md"),
+            skill.content || `# ${skill.name}\n\n${skill.description}\n`
+          );
+          excludeEntries.push(`.claude/skills/${skill.name}/`);
+        }
+
+        if (excludeEntries.length > 0) {
+          const { stdout: excludePathOut } = await run(
+            "git",
+            ["rev-parse", "--git-path", "info/exclude"],
+            worktreePath,
+            COMMAND_TIMEOUT_MS,
+            signal
+          );
+          const excludePath = path.isAbsolute(excludePathOut.trim())
+            ? excludePathOut.trim()
+            : path.join(worktreePath, excludePathOut.trim());
+          mkdirSync(path.dirname(excludePath), { recursive: true });
+          const existingExclude = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
+          const newEntries = excludeEntries.filter((entry) => !existingExclude.includes(entry));
+          if (newEntries.length > 0) {
+            appendFileSync(
+              excludePath,
+              (existingExclude && !existingExclude.endsWith("\n") ? "\n" : "") +
+                newEntries.join("\n") +
+                "\n"
+            );
+          }
+        }
+      }
+
       let prUrl: string | null = run_.prUrl ?? null;
 
       // Walks the step tree depth-first: run this step (unless a prior pass
@@ -488,52 +703,98 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
             await checkpoint(step);
           } else if (step.type === "ai_step") {
             const config = JSON.parse(step.config) as AiStepConfig;
-            const prompt = renderTemplate(config.prompt, templateVars);
+            let prompt = renderTemplate(config.prompt, templateVars);
+            const skill = config.skillId ? skillsById.get(config.skillId) : undefined;
+            if (skill) {
+              prompt = `Dùng skill "${skill.name}" (xem .claude/skills/${skill.name}/SKILL.md) khi thực hiện việc dưới đây.\n\n${prompt}`;
+            }
             await appendLog(ctx, `\n▶ AI step "${step.name}"`);
-            const { stdout } = await run(
-              "claude",
-              ["-p", prompt, "--dangerously-skip-permissions"],
-              worktreePath,
-              AI_STEP_TIMEOUT_MS,
-              signal
-            );
-            await appendLog(ctx, stdout.trim() || "(không có output)");
+            const text = await runClaude(prompt, worktreePath, AI_STEP_TIMEOUT_MS, signal, ctx);
+            if (!text.trim()) await appendLog(ctx, "(không có output)");
             await checkpoint(step);
           } else if (step.type === "planning") {
-            await appendLog(ctx, `\n▶ Planning "${step.name}"`);
-            if (!task) {
-              await appendLog(ctx, "Run này không gắn với task nào — bỏ qua, không có nơi để lưu planning.");
-              await checkpoint(step);
-            } else if (templateVars.planning.trim()) {
-              await appendLog(ctx, "Task đã có planning từ trước — bỏ qua, không tạo lại.");
+            if (existingStatus === "planned") {
+              // Phase 2 (reached via Continue after a pause): the human has
+              // had a chance to review/edit the plan (and answer whatever
+              // open questions it raised) via the Planning tab — execute
+              // whatever task.planning holds NOW, not what it held when
+              // phase 1 paused. Re-snapshot onto the run too, so its history
+              // reflects the plan as actually executed, not the pre-edit draft.
+              if (task) {
+                await prisma.workflowRun.update({
+                  where: { id: runId },
+                  data: { planning: templateVars.planning || null },
+                });
+              }
+              await appendLog(ctx, `\n▶ Planning "${step.name}": thực thi plan`);
+              if (!templateVars.planning.trim()) {
+                await appendLog(ctx, "Không có nội dung plan để thực thi — bỏ qua.");
+              } else {
+                const execPrompt = [
+                  "Thực thi đầy đủ theo kế hoạch sau. Đây là chạy tự động, không có ai theo dõi để trả lời —",
+                  "nếu plan có điểm còn mở/cần quyết định, tự chọn phương án hợp lý nhất rồi làm luôn,",
+                  "không dừng lại hỏi. Viết code, đừng chỉ mô tả:",
+                  "",
+                  templateVars.planning,
+                ].join("\n");
+                const text = await runClaude(execPrompt, worktreePath, AI_STEP_TIMEOUT_MS, signal, ctx);
+                if (!text.trim()) await appendLog(ctx, "(không có output)");
+              }
               await checkpoint(step);
             } else {
-              const prompt = [
-                "Phân tích task sau và viết 1 bản kế hoạch triển khai (implementation plan) rõ ràng,",
-                "chi tiết, dạng markdown — dùng heading, danh sách các bước cần làm, và nêu rủi ro/lưu ý",
-                "nếu có.",
-                "",
-                `Task: ${templateVars.title}`,
-                "",
-                templateVars.description || "(không có mô tả)",
-                "",
-                "CHỈ trả lời bằng nội dung plan dạng markdown. Không sửa file, không chạy lệnh nào khác.",
-              ].join("\n");
+              // Phase 1: generate a plan (or reuse the task's existing one).
+              await appendLog(ctx, `\n▶ Planning "${step.name}"`);
+              if (!task) {
+                await appendLog(ctx, "Run này không gắn với task nào — bỏ qua, không có nơi để lưu planning.");
+              } else if (templateVars.planning.trim()) {
+                await appendLog(ctx, "Task đã có planning từ trước — bỏ qua, không tạo lại.");
+              } else {
+                const prompt = [
+                  "Phân tích task sau và viết 1 bản kế hoạch triển khai (implementation plan) rõ ràng,",
+                  "chi tiết, dạng markdown — dùng heading, danh sách các bước cần làm, và nêu rủi ro/lưu ý",
+                  "nếu có.",
+                  "",
+                  `Task: ${templateVars.title}`,
+                  "",
+                  templateVars.description || "(không có mô tả)",
+                  "",
+                  "CHỈ trả lời bằng nội dung plan dạng markdown. Không sửa file, không chạy lệnh nào khác.",
+                ].join("\n");
 
-              const { stdout } = await run(
-                "claude",
-                ["-p", prompt, "--dangerously-skip-permissions"],
-                worktreePath,
-                AI_STEP_TIMEOUT_MS,
-                signal
-              );
-              const planning = stdout.trim();
-              await prisma.task.update({ where: { id: task.id }, data: { planning } });
-              templateVars.planning = planning;
-              await appendLog(
-                ctx,
-                "✓ Đã lưu planning vào tab Planning của ticket. Các step sau có thể dùng {{task.planning}} trong prompt."
-              );
+                const text = await runClaude(prompt, worktreePath, AI_STEP_TIMEOUT_MS, signal, ctx);
+                const planning = text.trim();
+                await prisma.task.update({ where: { id: task.id }, data: { planning } });
+                templateVars.planning = planning;
+                await appendLog(
+                  ctx,
+                  "✓ Đã lưu planning vào tab Planning của ticket. Các step sau có thể dùng {{task.planning}} trong prompt."
+                );
+              }
+
+              if (task) {
+                // Snapshot onto the run itself (distinct from Task.planning,
+                // which later runs will move on) so the run history can
+                // always show exactly what plan THIS run worked with.
+                await prisma.workflowRun.update({
+                  where: { id: runId },
+                  data: { planning: templateVars.planning || null },
+                });
+              }
+
+              if (step.pauseAfter && task && templateVars.planning.trim()) {
+                await checkpoint(step, "planned");
+                await appendLog(
+                  ctx,
+                  `\n⏸ Plan đã sẵn sàng để review tại tab Planning. Sửa/trả lời các câu hỏi còn mở nếu có, xong bấm "Continue" để thực thi plan.`
+                );
+                const pausedUpdate = await prisma.workflowRun.update({
+                  where: { id: runId },
+                  data: { status: "paused" },
+                });
+                emitWorkflowRunUpdate({ ...pausedUpdate, workflow: { name: ctx.workflowName } });
+                didPause = true;
+                throw new WorkflowPausedError();
+              }
               await checkpoint(step);
             }
           } else if (step.type === "action") {
@@ -614,8 +875,10 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
           // Only pause on the pass where this step just finished — a later
           // Continue call walks back through it to reach not-yet-done
           // children (existingStatus is "completed" by then) and must not
-          // pause here again.
-          if (step.pauseAfter) {
+          // pause here again. Planning handles its own pauseAfter above
+          // (only after phase 1, never after phase 2's execute) — it must
+          // not also hit this generic check on the way out.
+          if (step.pauseAfter && step.type !== "planning") {
             await appendLog(
               ctx,
               `\n⏸ Dừng lại để review sau step "${step.name}". Sửa code trực tiếp tại: ${worktreePath}\nBấm "Continue" trên run này khi xong.`

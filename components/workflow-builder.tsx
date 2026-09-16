@@ -182,9 +182,11 @@ const nodeTypes = { trigger: TriggerNode, step: StepNode };
 export function WorkflowBuilder({
   initialWorkflow,
   projectKey,
+  availableSkills,
 }: {
   initialWorkflow: WorkflowWithSteps;
   projectKey: string;
+  availableSkills: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [name, setName] = useState(initialWorkflow.name);
@@ -516,6 +518,7 @@ export function WorkflowBuilder({
           ) : selectedStep ? (
             <StepConfigPanel
               step={selectedStep}
+              availableSkills={availableSkills}
               onClose={() => setSelected(null)}
               onUpdated={handleStepUpdated}
               onDeleted={handleStepDeleted}

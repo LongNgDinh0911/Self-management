@@ -48,12 +48,40 @@ model Project {
   category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   categoryId String?
 
-  tasks     Task[]
-  labels    Label[]
-  workflows Workflow[]
+  // Project-specific guidance for AI steps (materialized as CLAUDE.local.md
+  // in the worktree at run time) — distinct from Skill, which is shared
+  // across every project and just toggled on/off per project.
+  instruction String?
+
+  tasks         Task[]
+  labels        Label[]
+  workflows     Workflow[]
+  projectSkills ProjectSkill[]
   nextTaskNumber Int @default(1)
 
   @@index([categoryId])
+}
+
+model Skill {
+  id          String   @id @default(cuid())
+  name        String   @unique // slug — matches the .claude/skills/<name>/ folder materialized at run time
+  description String   @default("")
+  content     String   @default("") // SKILL.md body
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  projectSkills ProjectSkill[]
+}
+
+// Which skills (from the shared vault) are enabled for which project.
+model ProjectSkill {
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  skill     Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  skillId   String
+
+  @@id([projectId, skillId])
+  @@index([skillId])
 }
 
 model Category {
@@ -195,10 +223,15 @@ model WorkflowRun {
   worktreePath  String?
   prUrl         String?
   log           String            @default("")
-  // JSON object mapping stepId -> "completed" | "pruned", used both to
-  // resume a crashed run (skip whatever already ran) and to remember which
-  // branches were pruned by a failed Condition (its subtree never runs, on
-  // a fresh pass or a resumed one).
+  // Snapshot of the plan this run actually worked with (whether freshly
+  // generated or reused from an earlier run), independent of Task.planning
+  // which only ever holds the latest value — this lets the run history show
+  // what each individual run saw, even after later runs move it on.
+  planning      String?
+  // JSON object mapping stepId -> "completed" | "pruned" | "planned", used
+  // to resume a crashed/paused run (skip whatever already ran), remember
+  // which branches were pruned by a failed Condition, and track a Planning
+  // step that generated its plan and paused but hasn't executed it yet.
   stepStatuses  String            @default("{}")
   startedAt     DateTime          @default(now())
   finishedAt    DateTime?

@@ -12,6 +12,7 @@ export default async function WorkflowBuilderPage({
 
   const project = await prisma.project.findUnique({
     where: { key: key.toUpperCase() },
+    include: { projectSkills: { include: { skill: true } } },
   });
   if (!project) {
     notFound();
@@ -25,10 +26,19 @@ export default async function WorkflowBuilderPage({
     notFound();
   }
 
+  const availableSkills = project.projectSkills.map((ps) => ({
+    id: ps.skill.id,
+    name: ps.skill.name,
+  }));
+
   return (
     <div className="flex h-full flex-col">
       <ProjectHeader project={project} />
-      <WorkflowBuilder initialWorkflow={workflow} projectKey={project.key} />
+      <WorkflowBuilder
+        initialWorkflow={workflow}
+        projectKey={project.key}
+        availableSkills={availableSkills}
+      />
     </div>
   );
 }

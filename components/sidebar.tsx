@@ -10,6 +10,7 @@ import {
   ChevronRightIcon,
   EllipsisHorizontalIcon,
   FolderIcon,
+  SparklesIcon,
 } from "@heroicons/react/24/outline";
 import { PROJECT_COLORS } from "@/lib/constants";
 
@@ -35,6 +36,7 @@ export function Sidebar({
   categories: Category[];
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -75,6 +77,18 @@ export function Sidebar({
       </div>
 
       <div className="flex-1 overflow-y-auto px-2">
+        <Link
+          href="/skills"
+          className={`mb-3 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
+            pathname === "/skills"
+              ? "bg-neutral-800 text-neutral-100"
+              : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+          }`}
+        >
+          <SparklesIcon className="h-3.5 w-3.5 shrink-0" />
+          Skill Vault
+        </Link>
+
         <div className="mb-1 flex items-center justify-between px-2 py-1">
           <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">
             Projects

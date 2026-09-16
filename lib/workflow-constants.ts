@@ -47,7 +47,7 @@ export const RUN_STATUS_META: Record<WorkflowRunStatus, { label: string; color: 
   paused: { label: "Paused", color: "#eab308" },
 };
 
-export type AiStepConfig = { prompt: string };
+export type AiStepConfig = { prompt: string; skillId?: string };
 export type ConditionStepConfig = { command: string; continueOnFailure: boolean };
 export type ActionStepConfig = { actionType: "create_pr"; prTitle?: string };
 // Fixed/hardcoded node — no user-editable config, the prompt is baked into

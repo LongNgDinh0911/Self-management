@@ -30,6 +30,9 @@ export async function PATCH(
   if (body.categoryId === null || typeof body.categoryId === "string") {
     data.categoryId = body.categoryId || null;
   }
+  if (body.instruction === null || typeof body.instruction === "string") {
+    data.instruction = body.instruction || null;
+  }
 
   const project = await prisma.project.update({ where: { id }, data });
   return NextResponse.json(project);

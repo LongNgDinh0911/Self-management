@@ -20,11 +20,13 @@ function parseConfig<T>(config: string, fallback: T): T {
 
 export function StepConfigPanel({
   step,
+  availableSkills,
   onClose,
   onUpdated,
   onDeleted,
 }: {
   step: WorkflowStep;
+  availableSkills: { id: string; name: string }[];
   onClose: () => void;
   onUpdated: (step: WorkflowStep) => void;
   onDeleted: (id: string) => void;
@@ -36,7 +38,7 @@ export function StepConfigPanel({
   const [saving, setSaving] = useState(false);
 
   const [aiConfig, setAiConfig] = useState<AiStepConfig>(() =>
-    parseConfig(step.config, { prompt: "" })
+    parseConfig(step.config, { prompt: "", skillId: undefined })
   );
   const [conditionConfig, setConditionConfig] = useState<ConditionStepConfig>(() =>
     parseConfig(step.config, { command: "", continueOnFailure: false })
@@ -97,10 +99,32 @@ export function StepConfigPanel({
           </label>
           <textarea
             value={aiConfig.prompt}
-            onChange={(e) => setAiConfig({ prompt: e.target.value })}
+            onChange={(e) => setAiConfig((c) => ({ ...c, prompt: e.target.value }))}
             rows={8}
             className="mb-4 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 font-mono text-xs text-neutral-100 outline-none focus:border-indigo-500"
           />
+
+          <label className="mb-1 block text-xs text-neutral-400">Skill mặc định (tùy chọn)</label>
+          <select
+            value={aiConfig.skillId ?? ""}
+            onChange={(e) =>
+              setAiConfig((c) => ({ ...c, skillId: e.target.value || undefined }))
+            }
+            className="mb-1 w-full rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1.5 text-sm text-neutral-100 outline-none focus:border-indigo-500"
+          >
+            <option value="">— Không dùng skill —</option>
+            {availableSkills.map((skill) => (
+              <option key={skill.id} value={skill.id}>
+                {skill.name}
+              </option>
+            ))}
+          </select>
+          <p className="mb-4 text-xs text-neutral-500">
+            {availableSkills.length === 0
+              ? "Chưa có skill nào được bật cho project này — bật ở Project Settings."
+              : "Skill được nạp sẵn (.claude/skills/) và ghi rõ trong prompt khi step này chạy."}
+          </p>
+
           <p className="mb-4 text-xs text-neutral-500">
             Chạy bằng Claude Code CLI trong git worktree riêng, không đụng vào working copy chính.
           </p>
@@ -138,6 +162,12 @@ export function StepConfigPanel({
           của ticket. Các step AI step phía sau (cùng workflow) có thể dùng{" "}
           <span className="text-neutral-300">{"{{task.planning}}"}</span> trong prompt để đọc
           lại plan này. Nếu task đã có planning từ trước, step này sẽ bỏ qua, không tạo lại.
+          <br />
+          <br />
+          Nếu bật <span className="text-neutral-300">"Dừng lại để review"</span> bên dưới: sau
+          khi tạo plan, run sẽ pause để bạn sửa/trả lời open questions ngay tại tab Planning —
+          bấm <span className="text-neutral-300">Continue</span> sẽ tự thực thi đúng plan đó
+          (không cần thêm 1 step AI step riêng chỉ để execute).
         </p>
       )}
 

@@ -3,9 +3,18 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PROJECT_COLORS } from "@/lib/constants";
-import type { Project } from "@/app/generated/prisma/client";
+import { MarkdownEditor } from "@/components/markdown-editor";
+import type { Project, Skill } from "@/app/generated/prisma/client";
 
-export function ProjectSettingsForm({ project }: { project: Project }) {
+export function ProjectSettingsForm({
+  project,
+  allSkills,
+  enabledSkillIds,
+}: {
+  project: Project;
+  allSkills: Skill[];
+  enabledSkillIds: string[];
+}) {
   const router = useRouter();
   const [name, setName] = useState(project.name);
   const [color, setColor] = useState(project.color);
@@ -14,9 +23,26 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
   const [defaultBranch, setDefaultBranch] = useState(project.defaultBranch);
   const [jiraSite, setJiraSite] = useState(project.jiraSite ?? "");
   const [jiraProjectKey, setJiraProjectKey] = useState(project.jiraProjectKey ?? "");
+  const [instruction, setInstruction] = useState(project.instruction ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [enabledIds, setEnabledIds] = useState<string[]>(enabledSkillIds);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  async function handleToggleSkill(skillId: string, enabled: boolean) {
+    setTogglingId(skillId);
+    setEnabledIds((prev) => (enabled ? [...prev, skillId] : prev.filter((id) => id !== skillId)));
+    const res = await fetch(`/api/projects/${project.id}/skills`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skillId, enabled }),
+    });
+    setTogglingId(null);
+    if (!res.ok) {
+      setEnabledIds((prev) => (enabled ? prev.filter((id) => id !== skillId) : [...prev, skillId]));
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -34,6 +60,7 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
         defaultBranch: defaultBranch.trim() || "main",
         jiraSite: jiraSite.trim() || null,
         jiraProjectKey: jiraProjectKey.trim() || null,
+        instruction: instruction.trim() || null,
       }),
     });
 
@@ -146,6 +173,64 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
             className="w-40 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm uppercase text-neutral-100 outline-none focus:border-indigo-500"
           />
         </div>
+      </div>
+
+      <h2 className="mb-1 mt-8 text-sm font-semibold text-neutral-100">Instructions</h2>
+      <p className="mb-3 text-xs text-neutral-500">
+        Hướng dẫn riêng cho project này — được nạp vào mọi AI step khi chạy workflow (materialize
+        thành <code className="text-neutral-400">.claude/CLAUDE.local.md</code> trong worktree).
+      </p>
+      <MarkdownEditor
+        value={instruction}
+        onChange={(v) => {
+          setInstruction(v);
+          setSaved(false);
+        }}
+        rows={10}
+        placeholder="Vd: quy ước code, kiến trúc, lưu ý khi review PR..."
+      />
+
+      <h2 className="mb-1 mt-8 text-sm font-semibold text-neutral-100">Skills</h2>
+      <p className="mb-3 text-xs text-neutral-500">
+        Bật skill từ{" "}
+        <a href="/skills" className="text-indigo-400 hover:underline">
+          Skill Vault
+        </a>{" "}
+        để dùng cho project này. Quản lý skill mặc định cho từng AI step trong Workflow Builder.
+      </p>
+      <div className="space-y-1.5">
+        {allSkills.map((skill) => {
+          const enabled = enabledIds.includes(skill.id);
+          return (
+            <label
+              key={skill.id}
+              className="flex items-center gap-2.5 rounded-md border border-neutral-800 px-2.5 py-2 text-sm hover:bg-neutral-900"
+            >
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={togglingId === skill.id}
+                onChange={(e) => handleToggleSkill(skill.id, e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-neutral-600 bg-neutral-800 text-indigo-600"
+              />
+              <div className="min-w-0">
+                <span className="font-mono text-xs text-indigo-400">{skill.name}</span>
+                {skill.description && (
+                  <span className="ml-2 text-xs text-neutral-500">{skill.description}</span>
+                )}
+              </div>
+            </label>
+          );
+        })}
+        {allSkills.length === 0 && (
+          <p className="text-xs text-neutral-600">
+            Chưa có skill nào trong{" "}
+            <a href="/skills" className="text-indigo-400 hover:underline">
+              Skill Vault
+            </a>
+            .
+          </p>
+        )}
       </div>
 
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
