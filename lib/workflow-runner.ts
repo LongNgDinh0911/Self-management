@@ -208,6 +208,87 @@ async function runClaude(
   return finalText;
 }
 
+const DECOMPOSE_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    steps: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 1,
+      maxItems: 10,
+    },
+  },
+  required: ["steps"],
+});
+
+// Splits a plan into an ordered list of smaller, independently-committable
+// steps before executing it — a single `claude -p` call asked to implement
+// an entire multi-part plan (DB migration + API + UI + tests…) in one shot
+// reliably runs into AI_STEP_TIMEOUT_MS on anything nontrivial (this is
+// exactly what happened on SM-21, twice). Executing the plan one substep at
+// a time and checkpointing after each means a later substep timing out
+// only loses that substep's work, not everything done so far. Falls back
+// to treating the whole plan as a single substep — same as the old
+// behavior — if decomposition fails or the plan is already simple enough
+// that the model says so itself.
+async function decomposePlan(planningText: string, cwd: string, signal: AbortSignal): Promise<string[]> {
+  const prompt = [
+    "Chia kế hoạch triển khai dưới đây thành các bước nhỏ, có thứ tự, mỗi bước là 1 đơn vị công việc",
+    "độc lập, làm xong là có thể dừng an toàn (vd: 1 bước cho migration/data model, 1 bước cho API,",
+    "1 bước cho UI, 1 bước cho test...). Khoảng 3-8 bước là hợp lý — đừng chia quá nhỏ vụn vặt.",
+    "Nếu plan đã đủ nhỏ/đơn giản để làm xong trong 1 lượt, trả về đúng 1 bước duy nhất là toàn bộ plan.",
+    "Mỗi bước mô tả đủ rõ để thực thi độc lập mà không cần xem lại các bước khác. Mô tả bước là việc",
+    "cần LÀM (code gì) — đừng nhắc đến git/commit, hệ thống tự động commit sau mỗi bước.",
+    "",
+    planningText,
+  ].join("\n");
+
+  try {
+    const { stdout } = await run(
+      "claude",
+      ["-p", prompt, "--output-format", "json", "--json-schema", DECOMPOSE_SCHEMA, "--dangerously-skip-permissions"],
+      cwd,
+      COMMAND_TIMEOUT_MS,
+      signal
+    );
+    const parsed = JSON.parse(stdout);
+    const steps = parsed?.structured_output?.steps;
+    if (Array.isArray(steps) && steps.length > 0 && steps.every((s) => typeof s === "string" && s.trim())) {
+      return steps;
+    }
+  } catch (err) {
+    if (err instanceof WorkflowCancelledError) throw err;
+    // Any failure here (bad JSON, timeout, claude erroring) just falls
+    // through to the single-step fallback below — decomposition is a
+    // pacing optimization, not something worth failing the run over.
+  }
+  return [planningText];
+}
+
+function buildSubstepPrompt(fullPlan: string, substeps: string[], index: number): string {
+  const done = substeps
+    .slice(0, index)
+    .map((s, i) => `✓ ${i + 1}. ${s}`)
+    .join("\n");
+  return [
+    "Bạn đang thực thi 1 kế hoạch triển khai lớn theo từng bước nhỏ — hệ thống tự động commit sau khi",
+    "bạn xong mỗi bước, ĐỪNG tự chạy git add/git commit/git push.",
+    "Đây là chạy tự động, không có ai theo dõi để trả lời — nếu có điểm còn mở/cần quyết định, tự chọn",
+    "phương án hợp lý nhất rồi làm luôn, không dừng lại hỏi.",
+    "",
+    "Kế hoạch tổng thể (để tham khảo bối cảnh — ĐỪNG làm lại các bước đã xong):",
+    fullPlan,
+    "",
+    done ? `Các bước đã hoàn thành trước đó (đã commit):\n${done}\n` : "",
+    `CHỈ làm bước hiện tại sau, không làm các bước khác:`,
+    `${index + 1}. ${substeps[index]}`,
+    "",
+    "Viết code, đừng chỉ mô tả.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function renderTemplate(
   template: string,
   vars: { title: string; description: string; key: string; planning: string }
@@ -492,8 +573,16 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
         COMMAND_TIMEOUT_MS,
         signal
       );
-      await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS, signal);
     }
+    // Push unconditionally, not just when the block above made a fresh
+    // commit — an AI step has full Bash access and occasionally commits on
+    // its own mid-step (observed with decomposed Planning substeps, whose
+    // descriptions can read like "...then commit"). When that happens the
+    // working tree is already clean by the time we get here, so gating the
+    // push behind "did *we* just commit" silently strands real, already-
+    // made commits on the local branch forever. `git push` is a cheap
+    // no-op ("Everything up-to-date") when there's truly nothing new.
+    await run("git", ["push", "-u", "origin", branchName], worktreePath, COMMAND_TIMEOUT_MS, signal);
     stepStatuses[step.id] = status;
     await prisma.workflowRun.update({ where: { id: runId }, data: { stepStatuses: JSON.stringify(stepStatuses) } });
   }
@@ -730,15 +819,38 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
               if (!templateVars.planning.trim()) {
                 await appendLog(ctx, "Không có nội dung plan để thực thi — bỏ qua.");
               } else {
-                const execPrompt = [
-                  "Thực thi đầy đủ theo kế hoạch sau. Đây là chạy tự động, không có ai theo dõi để trả lời —",
-                  "nếu plan có điểm còn mở/cần quyết định, tự chọn phương án hợp lý nhất rồi làm luôn,",
-                  "không dừng lại hỏi. Viết code, đừng chỉ mô tả:",
-                  "",
-                  templateVars.planning,
-                ].join("\n");
-                const text = await runClaude(execPrompt, worktreePath, AI_STEP_TIMEOUT_MS, signal, ctx);
-                if (!text.trim()) await appendLog(ctx, "(không có output)");
+                await appendLog(ctx, "Đang chia nhỏ plan thành các bước để thực thi tuần tự...");
+                const substeps = await decomposePlan(templateVars.planning, worktreePath, signal);
+
+                if (substeps.length <= 1) {
+                  const execPrompt = [
+                    "Thực thi đầy đủ theo kế hoạch sau. Đây là chạy tự động, không có ai theo dõi để trả lời —",
+                    "nếu plan có điểm còn mở/cần quyết định, tự chọn phương án hợp lý nhất rồi làm luôn,",
+                    "không dừng lại hỏi. Viết code, đừng chỉ mô tả:",
+                    "",
+                    templateVars.planning,
+                  ].join("\n");
+                  const text = await runClaude(execPrompt, worktreePath, AI_STEP_TIMEOUT_MS, signal, ctx);
+                  if (!text.trim()) await appendLog(ctx, "(không có output)");
+                } else {
+                  await appendLog(
+                    ctx,
+                    `Chia thành ${substeps.length} bước:\n` +
+                      substeps.map((s, i) => `${i + 1}. ${s}`).join("\n")
+                  );
+                  for (let i = 0; i < substeps.length; i++) {
+                    if (signal.aborted) throw new WorkflowCancelledError();
+                    await appendLog(ctx, `\n▶ Bước ${i + 1}/${substeps.length}: ${substeps[i]}`);
+                    const subPrompt = buildSubstepPrompt(templateVars.planning, substeps, i);
+                    const text = await runClaude(subPrompt, worktreePath, AI_STEP_TIMEOUT_MS, signal, ctx);
+                    if (!text.trim()) await appendLog(ctx, "(không có output)");
+                    // Checkpoint after EACH substep — if a later substep
+                    // times out or fails, everything done so far is
+                    // already committed & pushed instead of lost with the
+                    // whole run.
+                    await checkpoint(step);
+                  }
+                }
               }
               await checkpoint(step);
             } else {
